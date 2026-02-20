@@ -1,3 +1,6 @@
 {
-    "DISCORD_TOKEN": ""
+    "DISCORD_TOKEN": "",
+    "DATHOST_USERNAME": "",
+    "DATHOST_PASSWORD": "",
+    "DATHOST_SERVER_ID": ""
 }
