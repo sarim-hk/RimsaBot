@@ -5,6 +5,10 @@ from bot import RimsaBot
 if __name__ == "__main__":
     with open("config.json", "r") as f:
         cfg = json.load(f)
+    
+    # might have to update this logic depending on what the config holds in future
+    if any(not v for v in cfg.values()):
+        raise RuntimeError("Missing or invalid config values!")
 
     handler = logging.FileHandler(
         filename="discord.log",
