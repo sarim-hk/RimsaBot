@@ -60,7 +60,7 @@ class DatHost(commands.Cog):
             raise RuntimeError(f"Status doesn't exist but server is on! {server_status}")
         
         map_name: str = server_status[1].get("value")
-        players_online: str = server_status[2].get("value")[-1]
+        players_online: str = server_status[2].get("value")[0]
         await interaction.followup.send(f"Server status:\n`{players_online} players online on {map_name}`")
         
 class DatHostAPIWrapper:
