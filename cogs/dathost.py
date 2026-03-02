@@ -1,7 +1,7 @@
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 from typing import Any
 from bot import RimsaBot
 from utils.dathost import DatHostAPIWrapper
@@ -11,6 +11,7 @@ class DatHost(commands.Cog):
         self.bot = bot
         self.cfg = bot.cfg
         self.APIWrapper = DatHostAPIWrapper(bot.cfg)
+        self.update_status.start()
 
     @app_commands.command(name="start_server", description="Start (or restart) the DatHost server.")
     @app_commands.default_permissions(manage_guild=True)
@@ -64,7 +65,33 @@ class DatHost(commands.Cog):
         
         map_name: str = server_status[1].get("value")
         players_online: str = server_status[2].get("value")[0]
-        await interaction.followup.send(f"Server status:\n`{players_online} players online on {map_name}`")
+        await interaction.followup.send(f"Server status:\n`{players_online} players online on {map_name}.`")
         
+    @tasks.loop(seconds=15)
+    async def update_status(self):
+        result: dict[str, Any] = await self.APIWrapper.async_getserver()
+
+        server_on = result.get("on")
+        if not server_on:
+            await self.bot.change_presence(activity=discord.Game(f"server offline | @hk_sarim"))
+            return
+        
+        server_status = result.get("status", {})
+        print(server_status)
+        if not server_status:
+            await self.bot.change_presence(activity=discord.Game(f"server online | @hk_sarim"))
+            return
+                
+        map_name: str = server_status[1].get("value")
+        players_online: str = server_status[2].get("value").replace(" ", "")
+        await self.bot.change_presence(activity=discord.Game(f"{players_online} on {map_name} | @hk_sarim"))
+
+    @update_status.before_loop
+    async def before_update_status(self):
+        await self.bot.wait_until_ready()
+
+    async def cog_unload(self):
+        self.update_status.cancel()
+
 async def setup(bot: RimsaBot):
     await bot.add_cog(DatHost(bot))
