@@ -77,7 +77,6 @@ class DatHost(commands.Cog):
             return
         
         server_status = result.get("status", {})
-        print(server_status)
         if not server_status:
             await self.bot.change_presence(activity=discord.Game(f"server online | @hk_sarim"))
             return
