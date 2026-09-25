@@ -77,7 +77,6 @@ class DatHost(commands.Cog):
             return
         
         server_status = result.get("status", {})
-        print(server_status)
         if not server_status:
             await self.bot.change_presence(activity=discord.Game(f"server online | @hk_sarim"))
             return
@@ -94,4 +93,9 @@ class DatHost(commands.Cog):
         self.update_status.cancel()
 
 async def setup(bot: RimsaBot):
-    await bot.add_cog(DatHost(bot))
+    dathost_guild_decorator = app_commands.guilds(int(bot.cfg["DATHOST_GUILD_ID"]))
+    cog = DatHost(bot)
+    for command in cog.get_app_commands():
+        dathost_guild_decorator(command)
+
+    await bot.add_cog(cog)

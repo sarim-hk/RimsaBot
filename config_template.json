@@ -2,5 +2,6 @@
     "DISCORD_TOKEN": "",
     "DATHOST_USERNAME": "",
     "DATHOST_PASSWORD": "",
-    "DATHOST_SERVER_ID": ""
+    "DATHOST_SERVER_ID": "",
+    "DATHOST_GUILD_ID": 0
 }
