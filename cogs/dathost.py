@@ -18,18 +18,18 @@ class DatHost(commands.Cog):
     async def start_server(self, interaction: discord.Interaction):
         await interaction.response.defer(thinking=True)
         
-        startserver_responsecode: int = await self.APIWrapper.async_startserver()
+        startserver_responsecode: int = await self.APIWrapper.start_server()
         if startserver_responsecode != 200:
-            await interaction.followup.send(f"Couldn't start server! {startserver_responsecode}")
+            await interaction.followup.send(f"Couldn't start server! `{startserver_responsecode}`")
             raise RuntimeError(f"Couldn't start server! {startserver_responsecode}")
         
-        result: dict[str, Any] = await self.APIWrapper.async_getserver()
+        result: dict[str, Any] = await self.APIWrapper.get_server_status()
         server_ip = result.get("custom_domain")
         port = result.get("ports", {}).get("game")
         
         if not server_ip or not port:
-            await interaction.followup.send(f"Couldn't find server ip or port! {server_ip} {port}")
-            raise RuntimeError(f"Couldn't find server ip or port! {server_ip} {port}")
+            await interaction.followup.send(f"Couldn't find server ip or port! `{server_ip}:{port}`")
+            raise RuntimeError(f"Couldn't find server ip or port! {server_ip}:{port}")
         
         await interaction.followup.send(f"Server started.\n`connect {server_ip}:{port}`")
 
@@ -39,9 +39,9 @@ class DatHost(commands.Cog):
     async def stop_server(self, interaction: discord.Interaction):
         await interaction.response.defer(thinking=True)
         
-        stop_server_responsecode: int = await self.APIWrapper.async_stopserver()
+        stop_server_responsecode: int = await self.APIWrapper.stop_server()
         if stop_server_responsecode != 200:
-            await interaction.followup.send(f"Couldn't stop server! {stop_server_responsecode}")
+            await interaction.followup.send(f"Couldn't stop server! `{stop_server_responsecode}`")
             raise RuntimeError(f"Couldn't stop server! {stop_server_responsecode}")
         else:
             await interaction.followup.send(f"Server stopped.")
@@ -50,7 +50,7 @@ class DatHost(commands.Cog):
     async def check_server(self, interaction: discord.Interaction):
         await interaction.response.defer(thinking=True)
                 
-        result: dict[str, Any] = await self.APIWrapper.async_getserver()
+        result: dict[str, Any] = await self.APIWrapper.get_server_status()
 
         server_on = result.get("on")
         if not server_on:
@@ -59,7 +59,7 @@ class DatHost(commands.Cog):
         
         server_status = result.get("status", {})
         if not server_status:
-            await interaction.followup.send(f"Status doesn't exist but server is on! {server_status}")
+            await interaction.followup.send(f"Status doesn't exist but server is on! `{server_status}`")
             raise RuntimeError(f"Status doesn't exist but server is on! {server_status}")
         
         map_name: str = server_status[1].get("value")
@@ -68,7 +68,7 @@ class DatHost(commands.Cog):
         
     @tasks.loop(seconds=15)
     async def update_status(self):
-        result: dict[str, Any] = await self.APIWrapper.async_getserver()
+        result: dict[str, Any] = await self.APIWrapper.get_server_status()
 
         server_on = result.get("on")
         if not server_on:

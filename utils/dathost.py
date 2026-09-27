@@ -8,7 +8,7 @@ class DatHostAPIWrapper:
         self.username: str = cfg["DATHOST_USERNAME"]
         self.password: str = cfg["DATHOST_PASSWORD"]
 
-    async def async_startserver(self) -> int:
+    async def start_server(self) -> int:
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"https://dathost.net/api/0.1/game-servers/{self.server_id}/start",
@@ -16,7 +16,7 @@ class DatHostAPIWrapper:
             ) as response:
                 return response.status
 
-    async def async_stopserver(self) -> int:
+    async def stop_server(self) -> int:
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"https://dathost.net/api/0.1/game-servers/{self.server_id}/stop",
@@ -24,7 +24,7 @@ class DatHostAPIWrapper:
             ) as response:
                 return response.status
 
-    async def async_getserver(self) -> dict[str, Any]:
+    async def get_server_status(self) -> dict[str, Any]:
         async with aiohttp.ClientSession() as session:
             async with session.get(
                 f"https://dathost.net/api/0.1/game-servers/{self.server_id}",
