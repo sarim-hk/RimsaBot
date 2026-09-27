@@ -1,4 +1,8 @@
 {
+    "MYSQL_SERVER": "",
+    "MYSQL_DB": "",
+    "MYSQL_USERNAME": "",
+    "MYSQL_PASSWORD": "",
     "DISCORD_TOKEN": "",
     "DATHOST_USERNAME": "",
     "DATHOST_PASSWORD": "",
