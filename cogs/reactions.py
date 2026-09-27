@@ -22,7 +22,7 @@ class Reactions(commands.Cog):
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
-        if payload.message_author_id is None or payload.guild_id is None:
+        if payload.message_author_id is None or payload.guild_id is None or (payload.message_author_id == payload.user_id):
             return
 
         self.database.insert_guild_config(payload.guild_id)
@@ -37,7 +37,7 @@ class Reactions(commands.Cog):
 
     @commands.Cog.listener()
     async def on_raw_reaction_remove(self, payload: discord.RawReactionActionEvent):
-        if payload.message_author_id is None or payload.guild_id is None:
+        if payload.message_author_id is None or payload.guild_id is None or (payload.message_author_id == payload.user_id):
             return
 
         self.database.insert_guild_config(payload.guild_id)
