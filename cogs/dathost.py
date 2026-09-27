@@ -9,7 +9,6 @@ from utils.dathost import DatHostAPIWrapper
 class DatHost(commands.Cog):
     def __init__(self, bot: RimsaBot):
         self.bot = bot
-        self.cfg = bot.cfg
         self.APIWrapper = DatHostAPIWrapper(bot.cfg)
         self.update_status.start()
 
