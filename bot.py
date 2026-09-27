@@ -18,6 +18,7 @@ class RimsaBot(commands.Bot):
         await self.load_extension("cogs.reactions")
 
         dathost_guild = discord.Object(id=int(self.cfg["DATHOST_GUILD_ID"]))
+        await self.tree.sync()
         await self.tree.sync(guild=dathost_guild)
 
     async def on_ready(self):
