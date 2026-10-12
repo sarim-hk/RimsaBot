@@ -9,6 +9,10 @@ class Reactions(commands.Cog):
         self.bot = bot
         self.database = Database(bot.cfg)
 
+    async def cog_unload(self):
+        if self.database.connection.is_connected():
+            self.database.connection.close()
+
     @app_commands.command(name="set_max_message_age", description="Set the maximum message age for reaction tracking.")
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.checks.has_permissions(manage_guild=True)

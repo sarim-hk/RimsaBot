@@ -1,8 +1,26 @@
-from mysql.connector import MySQLConnection
-from typing import cast
+from mysql.connector import Error, MySQLConnection
+from functools import wraps
+from typing import Any, Callable, cast
 import discord
 
 DEFAULT_MAX_MESSAGE_AGE: int = 21600    # 6 hours
+
+def requires_connection(method: Callable[..., Any]) -> Callable[..., Any]:
+    @wraps(method)
+    def wrapper(self: "Database", *args: Any, **kwargs: Any) -> Any:
+        try:
+            # ping the db to see if the connection is up, attempt reconnection if not
+            self.connection.ping(reconnect=True, attempts=3, delay=1)
+        except Error:
+            # ping() with reconnect=True might not always work so try explicitly aswell.
+            self.connection.reconnect(attempts=3, delay=1)
+
+        if not self.connection.is_connected():
+            raise ConnectionError("Could not reconnect to the database.")
+
+        return method(self, *args, **kwargs)
+
+    return wrapper
 
 class Database:
     def __init__(self, cfg: dict[str, str]):
@@ -18,6 +36,7 @@ class Database:
 
         self.create_tables()
 
+    @requires_connection
     def create_tables(self) -> None:
         cursor = self.connection.cursor()
         try:
@@ -49,6 +68,7 @@ class Database:
         finally:
             cursor.close()
 
+    @requires_connection
     def get_max_message_age(self, guild_id: int) -> int:
         cursor = self.connection.cursor()
         try:
@@ -71,6 +91,7 @@ class Database:
         finally:
             cursor.close()
 
+    @requires_connection
     def set_max_message_age(self, age: int, guild_id: int) -> None:
         cursor = self.connection.cursor()
         try:
@@ -88,6 +109,7 @@ class Database:
         finally:
             cursor.close()
 
+    @requires_connection
     def insert_guild_config(self, guild_id: int) -> None:
         cursor = self.connection.cursor()
         try:
@@ -105,6 +127,7 @@ class Database:
         finally:
             cursor.close()        
 
+    @requires_connection
     def insert_reaction(self, payload: discord.RawReactionActionEvent) -> None:
         emoji_id = None
         if payload.emoji.is_custom_emoji():
@@ -134,6 +157,7 @@ class Database:
         finally:
             cursor.close()
 
+    @requires_connection
     def remove_reaction(self, payload: discord.RawReactionActionEvent) -> None:
         emoji_id = None
         if payload.emoji.is_custom_emoji():
@@ -161,7 +185,3 @@ class Database:
 
         finally:
             cursor.close()        
-
-    def close(self):
-        if self.connection.is_connected():
-            self.connection.close()
