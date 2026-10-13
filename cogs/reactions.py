@@ -4,7 +4,7 @@ from discord.ext import commands
 from bot import RimsaBot
 from utils.database import Database
 
-class Reactions(commands.Cog):
+class Reactions(commands.GroupCog, group_name="react"):
     def __init__(self, bot: RimsaBot):
         self.bot = bot
         self.database = Database(bot.cfg)

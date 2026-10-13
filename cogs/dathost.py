@@ -6,7 +6,7 @@ from typing import Any
 from bot import RimsaBot
 from utils.dathost import DatHostAPIWrapper
 
-class DatHost(commands.Cog):
+class DatHost(commands.GroupCog, group_name="dathost"):
     def __init__(self, bot: RimsaBot):
         self.bot = bot
         self.APIWrapper = DatHostAPIWrapper(bot.cfg)
