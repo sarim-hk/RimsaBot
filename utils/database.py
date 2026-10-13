@@ -69,6 +69,28 @@ class Database:
             cursor.close()
 
     @requires_connection
+    def get_user_reactions_received(self, user_id: int, guild_id: int) -> list[dict[str, Any]]:
+        cursor = self.connection.cursor(dictionary=True)
+        try:
+            cursor.execute("""
+                SELECT COUNT(*) AS Total, EmojiID, EmojiName
+                FROM Reactions
+                WHERE AuthorID = %s AND GuildID = %s
+                GROUP BY EmojiID, EmojiName
+                ORDER BY Total DESC
+            """, (user_id, guild_id))
+
+            rows = cursor.fetchall()
+            return cast(list[dict[str, Any]], rows)
+            
+        except Exception:
+            self.connection.rollback()
+            raise
+
+        finally:
+            cursor.close()        
+
+    @requires_connection
     def get_max_message_age(self, guild_id: int) -> int:
         cursor = self.connection.cursor()
         try:

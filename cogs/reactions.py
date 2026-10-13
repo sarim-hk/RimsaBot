@@ -3,6 +3,8 @@ from discord import app_commands
 from discord.ext import commands
 from bot import RimsaBot
 from utils.database import Database
+from utils.reactions import react_info_to_chart
+from typing import cast
 
 class Reactions(commands.GroupCog, group_name="react"):
     def __init__(self, bot: RimsaBot):
@@ -23,6 +25,17 @@ class Reactions(commands.GroupCog, group_name="react"):
         self.database.set_max_message_age(age, interaction.guild_id)
 
         await interaction.response.send_message(f"The maximum message has been set to `{age}` seconds for reaction tracking.")
+
+    @app_commands.command(name="info", description="Get the reaction info for a given user.")
+    async def info(self, interaction: discord.Interaction, user: discord.Member | None = None):
+        if interaction.guild_id is None:
+            return
+
+        user = user or cast(discord.Member, interaction.user)
+        react_info = self.database.get_user_reactions_received(user.id, interaction.guild_id)
+        chart = react_info_to_chart(react_info)
+
+        await interaction.response.send_message(chart)
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
