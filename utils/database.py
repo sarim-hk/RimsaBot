@@ -59,6 +59,13 @@ class Database:
                 MaxMessageAge int UNSIGNED NOT NULL DEFAULT {DEFAULT_MAX_MESSAGE_AGE}
             )""")
 
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS Users (
+                UserID bigint UNSIGNED PRIMARY KEY NOT NULL,
+                Username VARCHAR(32) NOT NULL,
+                AvatarURL VARCHAR(512)
+                )""")
+
             self.connection.commit() 
 
         except Exception:
@@ -167,6 +174,28 @@ class Database:
                 VALUES (%s)
             ;""",
             (guild_id,))
+            self.connection.commit()
+
+        except Exception:
+            self.connection.rollback()
+            raise
+
+        finally:
+            cursor.close()        
+
+    @requires_connection
+    def insert_user(self, user_id: int, username: str, avatar_url: str) -> None:
+        cursor = self.connection.cursor()
+        try:
+            cursor.execute("""
+                INSERT INTO Users
+                (UserID, Username, AvatarURL)
+                VALUES (%s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                Username = %s,
+                AvatarURL = %s
+            ;""",
+            (user_id, username, avatar_url, username, avatar_url))
             self.connection.commit()
 
         except Exception:

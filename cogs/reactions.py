@@ -4,7 +4,7 @@ from discord.ext import commands
 from bot import RimsaBot
 from utils.database import Database
 from utils.reactions import react_info_to_chart, react_leaderboard_to_chart
-from typing import Any, cast
+from typing import cast
 
 MAX_ENTRIES = 10
 
@@ -51,21 +51,7 @@ class Reactions(commands.GroupCog, group_name="react"):
         leaderboard_info = self.database.get_emoji_leaderboard(parsed_emoji.name, parsed_emoji.id, interaction.guild_id)
         leaderboard_info = leaderboard_info[:MAX_ENTRIES]
 
-        valid_leaderboard: list[dict[str, Any]] = []
-        for entry in leaderboard_info:
-            author_id = int(entry["AuthorID"])
-            member = interaction.guild.get_member(author_id)
-            
-            if member is None:
-                try:
-                    member = await interaction.guild.fetch_member(author_id)
-                except discord.HTTPException:
-                    continue
-
-            entry["AuthorName"] = member.name
-            valid_leaderboard.append(entry)
-
-        chart = react_leaderboard_to_chart(valid_leaderboard)
+        chart = react_leaderboard_to_chart(leaderboard_info)
         await interaction.followup.send(chart)
 
     @commands.Cog.listener()
@@ -81,6 +67,17 @@ class Reactions(commands.GroupCog, group_name="react"):
         if message_age.total_seconds() > max_age:
             return
 
+        reactor_user = payload.member
+        if reactor_user is None:
+            return
+
+        try:
+            author_user = await self.bot.fetch_user(payload.message_author_id)
+        except Exception:
+            return
+
+        self.database.insert_user(reactor_user.id, reactor_user.global_name, reactor_user.display_avatar.url)
+        self.database.insert_user(author_user.id, author_user.global_name, author_user.display_avatar.url)        
         self.database.insert_reaction(payload)
 
     @commands.Cog.listener()
