@@ -20,5 +20,5 @@ if __name__ == "__main__":
     bot.run(
         cfg["DISCORD_TOKEN"],
         log_handler=handler,
-        log_level=logging.DEBUG
+        log_level=logging.INFO
     )
