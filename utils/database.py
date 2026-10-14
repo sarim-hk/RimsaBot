@@ -84,11 +84,39 @@ class Database:
             return cast(list[dict[str, Any]], rows)
             
         except Exception:
-            self.connection.rollback()
             raise
 
         finally:
             cursor.close()        
+
+    @requires_connection
+    def get_emoji_leaderboard(self, emoji_name: str, emoji_id: int | None, guild_id: int) -> list[dict[str, int]]:
+        extension = ""
+        params: list[Any] = [guild_id, emoji_name]
+        
+        if emoji_id is not None:
+            extension = "AND EmojiID = %s"
+            params.append(emoji_id)
+
+        cursor = self.connection.cursor(dictionary=True)
+        try:
+            cursor.execute(f"""
+                SELECT AuthorID, Count(*) as Total
+                FROM Reactions
+                WHERE GuildID = %s
+                AND EmojiName = %s {extension}
+                GROUP BY AuthorID
+                ORDER BY Total DESC
+            """, params)
+
+            rows = cursor.fetchall()
+            return cast(list[dict[str, int]], rows)
+            
+        except Exception:
+            raise
+
+        finally:
+            cursor.close()    
 
     @requires_connection
     def get_max_message_age(self, guild_id: int) -> int:
@@ -107,7 +135,6 @@ class Database:
             return cast(int, row[0])
 
         except Exception:
-            self.connection.rollback()
             raise
 
         finally:

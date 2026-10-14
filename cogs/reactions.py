@@ -3,7 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 from bot import RimsaBot
 from utils.database import Database
-from utils.reactions import react_info_to_chart
+from utils.reactions import react_info_to_chart, react_leaderboard_to_chart
 from typing import cast
 
 class Reactions(commands.GroupCog, group_name="react"):
@@ -34,6 +34,17 @@ class Reactions(commands.GroupCog, group_name="react"):
         user = user or cast(discord.Member, interaction.user)
         react_info = self.database.get_user_reactions_received(user.id, interaction.guild_id)
         chart = react_info_to_chart(react_info)
+
+        await interaction.response.send_message(chart)
+
+    @app_commands.command(name="leaderboard", description="Get the leaderboard for a given emoji.")
+    async def leaderboard(self, interaction: discord.Interaction, emoji: str):
+        if interaction.guild_id is None:
+            return
+
+        parsed_emoji = discord.PartialEmoji.from_str(emoji)
+        leaderboard_info = self.database.get_emoji_leaderboard(parsed_emoji.name, parsed_emoji.id, interaction.guild_id)
+        chart = react_leaderboard_to_chart(leaderboard_info)
 
         await interaction.response.send_message(chart)
 
