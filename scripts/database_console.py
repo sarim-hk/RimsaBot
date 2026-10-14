@@ -1,11 +1,17 @@
 import inspect
 import json
-from typing import get_type_hints, Any
+from typing import get_args, get_type_hints, Any
 from utils.database import Database
 
 def convert(value: str, annotation: Any):
+    value = value.strip()
+
+    if value == "" and type(None) in get_args(annotation):
+        return None
+
     if annotation is int:
         return int(value)
+
     return value
 
 def main():
