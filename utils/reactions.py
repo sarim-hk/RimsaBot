@@ -31,26 +31,21 @@ def react_info_to_chart(react_info: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def react_leaderboard_to_chart(leaderboard_info: list[dict[str, int]]) -> str:
+def react_leaderboard_to_chart(leaderboard_info: list[dict[str, Any]]) -> str:
     if not leaderboard_info:
         return "No reactions yet."
 
-    leaderboard = sorted(
-        leaderboard_info,
-        key=lambda entry: int(entry["Total"]),
-        reverse=True,
-    )
-
+    leaderboard = sorted(leaderboard_info, key=lambda entry: int(entry["Total"]), reverse=True)
     max_reactions = max(int(entry["Total"]) for entry in leaderboard)
     bar_width = 12
     lines: list[str] = []
 
     for entry in leaderboard:
-        author_id = int(entry["AuthorID"])
+        author_name = str(entry["AuthorName"])
         total = int(entry["Total"])
+
         filled = round((total / max_reactions) * bar_width) if max_reactions else 0
         bar = "\u2588" * filled + "\u2591" * (bar_width - filled)
-
-        lines.append(f"`{bar}`  `{total}`  <@{author_id}>")
+        lines.append(f"`{bar}`  `{total}`  `{author_name}`")
 
     return "\n".join(lines)

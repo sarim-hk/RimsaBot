@@ -4,7 +4,9 @@ from discord.ext import commands
 from bot import RimsaBot
 from utils.database import Database
 from utils.reactions import react_info_to_chart, react_leaderboard_to_chart
-from typing import cast
+from typing import Any, cast
+
+MAX_ENTRIES = 10
 
 class Reactions(commands.GroupCog, group_name="react"):
     def __init__(self, bot: RimsaBot):
@@ -33,20 +35,38 @@ class Reactions(commands.GroupCog, group_name="react"):
 
         user = user or cast(discord.Member, interaction.user)
         react_info = self.database.get_user_reactions_received(user.id, interaction.guild_id)
-        chart = react_info_to_chart(react_info)
+        react_info = react_info[:MAX_ENTRIES]
 
+        chart = react_info_to_chart(react_info)
         await interaction.response.send_message(chart)
 
     @app_commands.command(name="leaderboard", description="Get the leaderboard for a given emoji.")
     async def leaderboard(self, interaction: discord.Interaction, emoji: str):
-        if interaction.guild_id is None:
+        if interaction.guild_id is None or interaction.guild is None:
             return
+
+        await interaction.response.defer()
 
         parsed_emoji = discord.PartialEmoji.from_str(emoji)
         leaderboard_info = self.database.get_emoji_leaderboard(parsed_emoji.name, parsed_emoji.id, interaction.guild_id)
-        chart = react_leaderboard_to_chart(leaderboard_info)
+        leaderboard_info = leaderboard_info[:MAX_ENTRIES]
 
-        await interaction.response.send_message(chart)
+        valid_leaderboard: list[dict[str, Any]] = []
+        for entry in leaderboard_info:
+            author_id = int(entry["AuthorID"])
+            member = interaction.guild.get_member(author_id)
+            
+            if member is None:
+                try:
+                    member = await interaction.guild.fetch_member(author_id)
+                except discord.HTTPException:
+                    continue
+
+            entry["AuthorName"] = member.name
+            valid_leaderboard.append(entry)
+
+        chart = react_leaderboard_to_chart(valid_leaderboard)
+        await interaction.followup.send(chart)
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):

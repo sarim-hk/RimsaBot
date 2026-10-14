@@ -90,7 +90,7 @@ class Database:
             cursor.close()        
 
     @requires_connection
-    def get_emoji_leaderboard(self, emoji_name: str, emoji_id: int | None, guild_id: int) -> list[dict[str, int]]:
+    def get_emoji_leaderboard(self, emoji_name: str, emoji_id: int | None, guild_id: int) -> list[dict[str, Any]]:
         extension = ""
         params: list[Any] = [guild_id, emoji_name]
         
@@ -110,7 +110,7 @@ class Database:
             """, params)
 
             rows = cursor.fetchall()
-            return cast(list[dict[str, int]], rows)
+            return cast(list[dict[str, Any]], rows)
             
         except Exception:
             raise
