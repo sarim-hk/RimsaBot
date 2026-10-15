@@ -99,8 +99,8 @@ class Database:
     @requires_connection
     def get_emoji_leaderboard(self, emoji_name: str, emoji_id: int | None, guild_id: int) -> list[dict[str, Any]]:
         extension = ""
+
         params: list[Any] = [guild_id, emoji_name]
-        
         if emoji_id is not None:
             extension = "AND EmojiID = %s"
             params.append(emoji_id)
@@ -108,11 +108,17 @@ class Database:
         cursor = self.connection.cursor(dictionary=True)
         try:
             cursor.execute(f"""
-                SELECT AuthorID, Count(*) as Total
+                SELECT
+                    Reactions.AuthorID,
+                    Users.Username as AuthorName,
+                    Count(*) as Total
                 FROM Reactions
-                WHERE GuildID = %s
-                AND EmojiName = %s {extension}
-                GROUP BY AuthorID
+                LEFT JOIN Users
+                    ON Reactions.AuthorID = Users.UserID 
+                WHERE
+                    Reactions.GuildID = %s
+                    AND Reactions.EmojiName = %s {extension}
+                GROUP BY Reactions.AuthorID, Users.Username
                 ORDER BY Total DESC
             """, params)
 
