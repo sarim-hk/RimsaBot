@@ -1,5 +1,6 @@
 import asyncio
 import json
+from typing import Any, cast
 
 import discord
 
@@ -32,7 +33,7 @@ async def main() -> None:
 
                 ORDER BY UserID
             """)
-            users = cursor.fetchall()
+            users = cast(list[dict[str, Any]], cursor.fetchall())
         finally:
             cursor.close()
 
