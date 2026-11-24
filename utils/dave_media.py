@@ -252,11 +252,31 @@ class DaveState:
             self._note(f"prepare epoch {epoch} (version {version})")
             return []
         if self._session.has_established_group():
-            # Epoch 1 is for pending members creating/re-creating a group; we
-            # already joined, so resetting would lose our state.
-            self._note("prepare epoch 1 ignored (already in a group)")
-            return []
+            # Go Live groups exist only while viewers watch: after the last one
+            # leaves, a new viewer re-creates the group and epoch 1 arrives
+            # again. The old epoch cannot parse the new group's proposals
+            # ("PublicMessage not for this epoch"), so start over and offer a
+            # fresh key package instead of staying on the dead group.
+            self._note("prepare epoch 1 for a re-created group: resetting")
+            self._reset_group()
         return self._init(version)
+
+    def _reset_group(self) -> None:
+        try:
+            self._session.reset()
+        except Exception as e:
+            self._note(f"session reset failed: {type(e).__name__}")
+        self.has_ratchet = False
+        self.own_ratchet = None
+        self._prepared.clear()
+        # Epoch 1 means we are a pending (re)joiner again; let an existing
+        # member commit the Add and welcome us.
+        self._waiting_for_welcome = True
+        if self._encryptor is not None:
+            try:
+                self._encryptor.set_key_ratchet(None)
+            except Exception:
+                pass
 
     def on_external_sender(self, payload: bytes) -> None:
         try:
