@@ -7,7 +7,8 @@ if __name__ == "__main__":
         cfg = json.load(f)
     
     # might have to update this logic depending on what the config holds in future
-    if any(not v for v in cfg.values()):
+    optional = {"WATCHER_TOKEN", "SENDER_TOKEN"}
+    if any(not v for k, v in cfg.items() if k not in optional):
         raise RuntimeError("Missing or invalid config values!")
 
     handler = logging.FileHandler(
@@ -20,5 +21,6 @@ if __name__ == "__main__":
     bot.run(
         cfg["DISCORD_TOKEN"],
         log_handler=handler,
-        log_level=logging.INFO
+        log_level=logging.INFO,
+        root_logger=True,  # also capture utils.* (watcher / stream probe) logs
     )

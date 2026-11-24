@@ -4,6 +4,8 @@
     "MYSQL_USERNAME": "",
     "MYSQL_PASSWORD": "",
     "DISCORD_TOKEN": "",
+    "WATCHER_TOKEN": "",
+    "SENDER_TOKEN": "",
     "DATHOST_USERNAME": "",
     "DATHOST_PASSWORD": "",
     "DATHOST_SERVER_ID": "",
