@@ -4,8 +4,10 @@ import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any
+from utils import voice_mix
 from utils.stream_voice import StreamProbe
 from utils.user_gateway import DEFAULT_GATEWAY_URL, GatewayError, StreamInfo, Watcher
+from utils.voice_probe import VoiceProbe
 from utils.voice_sender import Sender, SenderError
 
 log = logging.getLogger(__name__)
@@ -24,6 +26,7 @@ class RelaySession:
     stream: StreamInfo | None = None  # set once the watcher is attached
     media_status: str = "not started"  # milestone 3a probe result
     watcher_status: str = "attached"   # updated if the watcher ends before the probe
+    voice_status: str = "not started"  # call-audio relay (voice channel A -> B)
 
 class RelayManager:
     # How long the sender's Go Live may sit without a viewer after /restream.
@@ -39,6 +42,8 @@ class RelayManager:
         self._watcher: Watcher | None = None
         self._probe: StreamProbe | None = None
         self._sender: Sender | None = None
+        self._voice_probe: VoiceProbe | None = None
+        self._mixer: voice_mix.VoiceMixer | None = None
         self._probe_finished = False
         # (session, why it ended, when) for the last relay that ended on its own
         self.last_ended: tuple[RelaySession, str, float] | None = None
@@ -65,6 +70,13 @@ class RelayManager:
 
     def probe_stats(self) -> dict[str, Any] | None:
         return self._probe.stats() if self._probe is not None else None
+
+    @property
+    def voice_status(self) -> str | None:
+        return self._voice_probe.summary() if self._voice_probe is not None else None
+
+    def mixer_stats(self) -> dict[str, Any] | None:
+        return self._mixer.stats() if self._mixer is not None else None
 
     async def start(self, *, guild_id: int, source_channel_id: int, dest_channel_id: int, target_user_id: int, started_by: int) -> RelaySession:
         if self._active is not None:
@@ -121,6 +133,7 @@ class RelayManager:
                 raise RelayError(f"Watcher failed: {e}") from e
             if session.stream is not None:
                 self._probe = StreamProbe(session.stream, on_frame=self._on_frame)
+                self._start_voice(session, session.stream)
                 self._spawn(self._run_probe(session, self._probe, 20.0))
         else:
             session.media_status = "dry run (no WATCHER_TOKEN)"
@@ -183,6 +196,7 @@ class RelayManager:
         probe = self._probe = StreamProbe(stream, on_frame=self._on_frame)
         # A viewer PLI on B asks for a fresh IDR; request one from A.
         sender.on_keyframe_request = probe.request_keyframe
+        self._start_voice(session, stream)
         self._spawn(self._run_probe(session, probe, None))
         self._spawn(self._ensure_keyframe(session, probe, sender))
 
@@ -192,6 +206,54 @@ class RelayManager:
                 return
             probe.request_keyframe()
             await asyncio.sleep(self.KEYFRAME_PLI_INTERVAL)
+
+    def _start_voice(self, session: RelaySession, stream: StreamInfo) -> None:
+        """Receive the call audio from A and, with a sender, mix it into B."""
+        if not stream.voice_endpoint or not stream.voice_token:
+            session.voice_status = "unavailable: Discord didn't send a voice server"
+            return
+        mixer = None
+        if self._sender is not None:
+            if not voice_mix.available():
+                session.voice_status = "disabled: the Opus codec library isn't installed"
+                return
+            try:
+                mixer = voice_mix.VoiceMixer(self._sender.send_voice_audio)
+            except Exception as e:
+                log.warning("voice mixer unavailable: %s", type(e).__name__)
+                session.voice_status = "disabled: the Opus encoder isn't available"
+                return
+        probe = VoiceProbe(
+            guild_id=session.guild_id,
+            channel_id=session.source_channel_id,
+            user_id=stream.user_id,
+            session_id=stream.voice_session_id,
+            endpoint=stream.voice_endpoint,
+            token=stream.voice_token,
+            on_frame=mixer.feed if mixer is not None else None,
+        )
+        self._voice_probe = probe
+        self._mixer = mixer
+        session.voice_status = "connecting"
+        self._spawn(self._run_voice(session, probe, mixer))
+
+    async def _run_voice(
+        self, session: RelaySession, probe: VoiceProbe, mixer: voice_mix.VoiceMixer | None
+    ) -> None:
+        mixer_task = asyncio.create_task(mixer.run()) if mixer is not None else None
+        try:
+            summary = await probe.run()
+        except Exception as e:
+            log.exception("voice probe crashed")
+            summary = f"crashed: {type(e).__name__}"
+        finally:
+            if mixer is not None:
+                mixer.close()
+                if mixer_task is not None:
+                    mixer_task.cancel()
+        session.voice_status = summary
+        log.info("voice relay result: %s", summary)
+        # Call audio is an extra: losing it does not end the stream relay.
 
     def _on_frame(self, kind: str, plaintext: bytes, timestamp: int) -> None:
         sender = self._sender
@@ -232,10 +294,16 @@ class RelayManager:
         watcher, self._watcher = self._watcher, None
         probe, self._probe = self._probe, None
         sender, self._sender = self._sender, None
+        voice, self._voice_probe = self._voice_probe, None
+        mixer, self._mixer = self._mixer, None
         self._probe_finished = False
         if sender is not None:
             sender.on_keyframe_request = None
             sender.on_end = None
+        if mixer is not None:
+            mixer.close()
+        if voice is not None:
+            await voice.close()
         if probe is not None:
             await probe.close()
         if sender is not None:
@@ -293,11 +361,15 @@ class RelayManager:
         probe, self._probe = self._probe, None
         watcher, self._watcher = self._watcher, None
         sender, self._sender = self._sender, None
-        for closer in (probe, watcher, sender):
+        voice, self._voice_probe = self._voice_probe, None
+        mixer, self._mixer = self._mixer, None
+        if mixer is not None:
+            mixer.close()
+        for closer in (probe, voice, watcher, sender):
             if closer is not None:
                 self._close_later(closer)
 
-    def _close_later(self, closer: Watcher | StreamProbe | Sender) -> None:
+    def _close_later(self, closer: Watcher | StreamProbe | Sender | VoiceProbe) -> None:
         task = asyncio.create_task(closer.close())
         self._bg.add(task)
         task.add_done_callback(self._bg.discard)

@@ -145,6 +145,26 @@ class Sender:
         self._dave: DaveState | None = None
         self.encryptor: Any | None = None
 
+        # Channel voice connection: the relayed call audio, transmitted as the
+        # sender account's microphone. Separate socket, group and keys from the
+        # Go Live stream above.
+        self._channel_ws: aiohttp.ClientWebSocketResponse | None = None
+        self._channel_seq = -1
+        self._channel_tasks: list[asyncio.Task] = []
+        self._channel_udp: _Udp | None = None
+        self._channel_crypto: TransportCrypto | None = None
+        self._channel_dave: DaveState | None = None
+        self.channel_encryptor: Any | None = None
+        self._voice_server_token = ""
+        self.mic_ssrc = 0
+        self._mic_seq = random.getrandbits(16)
+        self._mic_counter = random.getrandbits(32)
+        self._mic_speaking = False
+        self._last_mic_at = 0.0
+        self.mic_sent = 0
+        self.mic_dropped = 0
+        self.voice_state = "not connected"
+
         self.audio_ssrc = 0
         self.video_ssrc = random.getrandbits(32)
         self.rtx_ssrc = random.getrandbits(32)
@@ -178,12 +198,14 @@ class Sender:
         self._futures = {
             name: asyncio.get_running_loop().create_future()
             for name in (
-                "ready", "voice", "stream_create", "stream_server",
-                "voice_ready", "session_description",
+                "ready", "voice", "voice_server", "stream_create",
+                "stream_server", "voice_ready", "session_description",
+                "channel_voice_ready", "channel_voice_session",
             )
         }
         await self._connect_gateway()
         await self._join_voice()
+        await self._connect_channel_voice()
         await self._create_stream()
         await self._connect_stream_voice()
         self.state = "waiting for viewer"
@@ -263,7 +285,9 @@ class Sender:
         return (
             f"{self.state}; audio {self.audio_sent}, video {self.video_sent} "
             f"(keys {self.keyframes_sent}), dropped {self.dropped}, "
-            f"rtcp {self.rtcp_received}, pli {self.pli_requests}"
+            f"rtcp {self.rtcp_received}, pli {self.pli_requests}; "
+            f"voice {self.voice_state}, mic {self.mic_sent} "
+            f"(dropped {self.mic_dropped})"
         )
 
     def stats(self) -> dict[str, Any]:
@@ -275,6 +299,10 @@ class Sender:
             "keyframes_sent": self.keyframes_sent,
             "dropped": self.dropped,
             "pli": self.pli_requests,
+            "voice_state": self.voice_state,
+            "mic_ready": self.can_send_voice,
+            "mic_sent": self.mic_sent,
+            "mic_dropped": self.mic_dropped,
         }
 
     async def close(self) -> None:
@@ -282,9 +310,13 @@ class Sender:
         self.on_end = None
         await self._leave_stream()
         current = asyncio.current_task()
-        for task in self._tasks + self._voice_tasks:
+        for task in self._tasks + self._voice_tasks + self._channel_tasks:
             if task is not current:
                 task.cancel()
+        if self._channel_ws is not None and not self._channel_ws.closed:
+            await self._channel_ws.close()
+        if self._channel_udp is not None and self._channel_udp.transport is not None:
+            self._channel_udp.transport.close()
         if self._voice_ws is not None and not self._voice_ws.closed:
             await self._voice_ws.close()
         if self._udp is not None and self._udp.transport is not None:
@@ -454,6 +486,11 @@ class Sender:
             if str(d.get("channel_id")) == str(self._channel_id):
                 self.voice_session_id = d.get("session_id") or self.session_id
                 self._resolve("voice", True)
+        elif event == "VOICE_SERVER_UPDATE":
+            # The guild voice server for channel B (the stream server comes
+            # separately as STREAM_SERVER_UPDATE).
+            if str(d.get("guild_id")) == str(self._guild_id):
+                self._resolve("voice_server", d)
         elif event == "STREAM_CREATE" and d.get("stream_key") == self.stream_key:
             self._resolve("stream_create", d)
         elif event == "STREAM_SERVER_UPDATE" and d.get("stream_key") == self.stream_key:
@@ -529,6 +566,270 @@ class Sender:
             "ssrc": self.audio_ssrc,
             "delay": 0,
         })
+
+    # --- channel voice connection (the relayed call audio as our microphone) ---
+
+    async def _connect_channel_voice(self) -> None:
+        server = await self._wait("voice_server", 20, "the voice server")
+        endpoint = str(server.get("endpoint") or "")
+        token = str(server.get("token") or "")
+        if not endpoint or not token:
+            raise SenderError("The voice server update had no endpoint or token.")
+        self._voice_server_token = token
+        if dave_media.available():
+            self.channel_encryptor = dave_media.dave.Encryptor()
+            self._channel_dave = DaveState(
+                group_id=self._channel_id,
+                self_user_id=self.user_id,
+                # The sender is normally the first member in B: it creates the
+                # voice group, then commits adds for people who join later.
+                streamer_user_id=self.user_id,
+                self_encryptor=self.channel_encryptor,
+            )
+        host = endpoint.removeprefix("wss://").rstrip("/")
+        try:
+            self._channel_ws = await self._http.ws_connect(
+                f"wss://{host}/?v={VOICE_GATEWAY_VERSION}", max_msg_size=0
+            )
+        except aiohttp.ClientError as e:
+            raise SenderError(f"Couldn't reach the voice server: {e}") from e
+        self._channel_tasks.append(asyncio.create_task(self._channel_loop()))
+        self.voice_state = "connecting"
+
+        ready = await self._wait("channel_voice_ready", 15, "the voice server handshake")
+        mode = next((m for m in PREFERRED_MODES if m in ready.get("modes", [])), None)
+        if mode is None:
+            raise SenderError(f"No supported transport mode in {ready.get('modes')}")
+        ip, port = await self._channel_discover(ready["ip"], ready["port"], ready["ssrc"])
+        self.mic_ssrc = int(ready.get("ssrc") or 0)
+        if not self.mic_ssrc:
+            raise SenderError("The voice server didn't assign a microphone SSRC.")
+        if self.channel_encryptor is not None:
+            self.channel_encryptor.assign_ssrc_to_codec(
+                self.mic_ssrc, dave_media.dave.Codec.opus
+            )
+        await self._channel_send(1, {
+            "protocol": "udp",
+            "data": {"address": ip, "port": port, "mode": mode},
+            "codecs": [{
+                "name": "opus", "type": "audio", "priority": 1000,
+                "payload_type": OPUS_PAYLOAD_TYPE, "encode": True, "decode": False,
+            }],
+        })
+        session = await self._wait("channel_voice_session", 15, "the voice session description")
+        if self._channel_crypto is None:
+            raise SenderError("The voice session description had no secret_key.")
+        log.info(
+            "sender voice: channel %s, mode %s, dave v%s, mic ssrc %s",
+            self._channel_id, session.get("mode"),
+            session.get("dave_protocol_version"), self.mic_ssrc,
+        )
+        # The gateway expects Speaking before media; sending it now (rather
+        # than racing the first UDP packet) also registers the ssrc. The idle
+        # watcher turns it off again until there is audio to relay.
+        await self._channel_send(5, {
+            "speaking": 1, "delay": 0, "ssrc": self.mic_ssrc,
+        })
+        self._mic_speaking = True
+        self._last_mic_at = time.monotonic()
+        self._channel_tasks.append(asyncio.create_task(self._mic_idle_watch()))
+
+    async def _channel_discover(self, ip: str, port: int, ssrc: int) -> tuple[str, int]:
+        loop = asyncio.get_running_loop()
+        udp = self._channel_udp = _Udp(None)
+        await loop.create_datagram_endpoint(lambda: udp, remote_addr=(ip, port))
+        transport = udp.transport
+        assert transport is not None
+        packet = struct.pack(">HHI", 1, 70, ssrc) + b"\x00" * 66
+        for _ in range(3):
+            transport.sendto(packet)
+            try:
+                return await asyncio.wait_for(asyncio.shield(udp.discovery), 2)
+            except asyncio.TimeoutError:
+                continue
+        raise SenderError("No reply to UDP IP discovery from the voice server.")
+
+    @property
+    def can_send_voice(self) -> bool:
+        return (
+            self.channel_encryptor is not None
+            and self._channel_udp is not None
+            and self._channel_crypto is not None
+            and self.channel_encryptor.has_key_ratchet()
+        )
+
+    def send_voice_audio(self, opus: bytes, rtp_ts: int) -> bool:
+        encryptor = self.channel_encryptor
+        if encryptor is None or not self.can_send_voice or not opus:
+            self.mic_dropped += 1
+            return False
+        if opus == OPUS_SILENCE:
+            frame = opus  # protocol silence packets pass through unencrypted
+        else:
+            frame = encryptor.encrypt(
+                dave_media.dave.MediaType.audio, self.mic_ssrc, opus
+            )
+            if frame is None:
+                self.mic_dropped += 1
+                return False
+        self._ensure_speaking()
+        self._send_mic_rtp(rtp_ts, frame)
+        self._mic_seq = (self._mic_seq + 1) & 0xFFFF
+        self.mic_sent += 1
+        self._last_mic_at = time.monotonic()
+        self.voice_state = "relaying"
+        return True
+
+    def _send_mic_rtp(self, timestamp: int, payload: bytes) -> None:
+        udp = self._channel_udp
+        crypto = self._channel_crypto
+        if udp is None or udp.transport is None or crypto is None:
+            return
+        header = struct.pack(
+            ">BBHII", 0x80, OPUS_PAYLOAD_TYPE, self._mic_seq,
+            timestamp & 0xFFFFFFFF, self.mic_ssrc,
+        )
+        self._mic_counter = (self._mic_counter + 1) & 0xFFFFFFFF
+        udp.transport.sendto(crypto.encrypt_packet(header, payload, self._mic_counter))
+
+    def _ensure_speaking(self) -> None:
+        # The gateway expects a Speaking packet before media on this ssrc.
+        if self._mic_speaking:
+            return
+        self._mic_speaking = True
+        self._spawn_channel(self._channel_send(5, {
+            "speaking": 1, "delay": 0, "ssrc": self.mic_ssrc,
+        }))
+
+    def _spawn_channel(self, coro) -> None:
+        task = asyncio.create_task(coro)
+        self._channel_tasks.append(task)
+        task.add_done_callback(
+            lambda t: self._channel_tasks.remove(t) if t in self._channel_tasks else None
+        )
+
+    async def _mic_idle_watch(self) -> None:
+        while not self._closing:
+            await asyncio.sleep(0.5)
+            if not self._mic_speaking:
+                continue
+            if time.monotonic() - self._last_mic_at < 1.0:
+                continue
+            self._mic_speaking = False
+            try:
+                await self._channel_send(5, {
+                    "speaking": 0, "delay": 0, "ssrc": self.mic_ssrc,
+                })
+            except Exception:
+                return
+
+    async def _channel_send(self, op: int, d: Any) -> None:
+        ws = self._channel_ws
+        if ws is None or ws.closed:
+            return
+        await ws.send_str(json.dumps({"op": op, "d": d}))
+
+    async def _channel_actions(self, actions) -> None:
+        for action in actions:
+            if action.data is not None:
+                await self._channel_send(action.op, action.data)
+            elif action.binary is not None and self._channel_ws is not None:
+                await self._channel_ws.send_bytes(bytes([action.op]) + action.binary)
+
+    async def _channel_loop(self) -> None:
+        assert self._channel_ws is not None
+        try:
+            async for message in self._channel_ws:
+                if message.type == aiohttp.WSMsgType.TEXT:
+                    await self._channel_handle_json(json.loads(message.data))
+                elif message.type == aiohttp.WSMsgType.BINARY and len(message.data) >= 3:
+                    self._channel_seq = struct.unpack(">H", message.data[:2])[0]
+                    await self._channel_handle_binary(message.data[2], message.data[3:])
+        except Exception as e:
+            log.warning("sender voice loop error: %s", type(e).__name__)
+        finally:
+            if not self._closing:
+                code = self._channel_ws.close_code
+                log.warning("sender voice channel closed (code %s); call audio stops", code)
+                self.voice_state = f"closed (code {code})"
+
+    async def _channel_handle_json(self, payload: dict) -> None:
+        op = payload.get("op")
+        d = payload.get("d") or {}
+        if payload.get("seq") is not None:
+            self._channel_seq = payload["seq"]
+        if op == 8:
+            self._channel_tasks.append(
+                asyncio.create_task(self._channel_heartbeat(d["heartbeat_interval"]))
+            )
+            await self._channel_send(0, {
+                "server_id": str(self._guild_id),
+                "user_id": self.user_id,
+                "session_id": self.voice_session_id,
+                "token": self._voice_server_token,
+                "video": False,
+                "streams": [],
+                "max_dave_protocol_version": 1,
+            })
+        elif op == 2:
+            self._resolve("channel_voice_ready", d)
+        elif op == 4:
+            await self._on_channel_session_description(d)
+            self._resolve("channel_voice_session", d)
+        elif op == 11 and self._channel_dave is not None:
+            self._channel_dave.add_recognized_users(d.get("user_ids") or [])
+        elif op == 13 and self._channel_dave is not None and d.get("user_id"):
+            self._channel_dave.remove_recognized_user(d["user_id"])
+        elif op == 21 and self._channel_dave is not None:
+            await self._channel_actions(self._channel_dave.prepare_transition(
+                int(d.get("transition_id", 0)), int(d.get("protocol_version", 0))
+            ))
+        elif op == 22 and self._channel_dave is not None:
+            self._channel_dave.execute_transition(int(d.get("transition_id", 0)))
+            if self.can_send_voice:
+                self.voice_state = "relaying"
+                log.info("sender voice: mic ratchet ready; call audio can flow")
+        elif op == 24 and self._channel_dave is not None:
+            await self._channel_actions(self._channel_dave.on_prepare_epoch(
+                int(d.get("epoch", 0)), int(d.get("protocol_version", 0))
+            ))
+
+    async def _on_channel_session_description(self, d: dict) -> None:
+        mode = d.get("mode")
+        secret_key = d.get("secret_key")
+        if mode and secret_key:
+            try:
+                self._channel_crypto = TransportCrypto(str(mode), bytes(secret_key))
+            except ValueError as e:
+                raise SenderError(f"Sender voice transport crypto: {e}") from e
+        if self._channel_dave is not None:
+            await self._channel_actions(self._channel_dave.on_session_description(d))
+
+    async def _channel_handle_binary(self, op: int, payload: bytes) -> None:
+        dave = self._channel_dave
+        if dave is None:
+            return
+        if op == 25:
+            dave.on_external_sender(payload)
+        elif op == 27:
+            await self._channel_actions(dave.on_proposals(payload))
+        elif op in (29, 30) and len(payload) >= 2:
+            transition_id = int.from_bytes(payload[:2], "big")
+            if op == 29:
+                await self._channel_actions(dave.on_commit(transition_id, payload[2:]))
+            else:
+                await self._channel_actions(dave.on_welcome(transition_id, payload[2:]))
+            if self.can_send_voice:
+                self.voice_state = "relaying"
+
+    async def _channel_heartbeat(self, interval_ms: float) -> None:
+        interval = interval_ms / 1000
+        await asyncio.sleep(interval * random.random())
+        while True:
+            await self._channel_send(3, {
+                "t": int(time.time() * 1000), "seq_ack": self._channel_seq,
+            })
+            await asyncio.sleep(interval)
 
     def _on_udp_packet(self, data: bytes) -> None:
         if len(data) < 4:

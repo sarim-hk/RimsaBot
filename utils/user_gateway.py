@@ -99,6 +99,10 @@ class StreamInfo:
     streamer_user_id: str    # whose frames we want to decrypt
     voice_session_id: str = field(repr=False)
     token: str = field(repr=False)  # short-lived stream token
+    # The channel's own voice server (VOICE_SERVER_UPDATE), for receiving the
+    # call audio. Empty when Discord didn't send one.
+    voice_endpoint: str = ""
+    voice_token: str = field(default="", repr=False)
 
 class Watcher:
     def __init__(self, token: str, *, gateway_url: str = DEFAULT_GATEWAY_URL, on_end: Callable[[], None] | None = None) -> None:
@@ -138,7 +142,7 @@ class Watcher:
         loop = asyncio.get_running_loop()
         self._futures = {
             k: loop.create_future()
-            for k in ("ready", "voice", "stream_create", "stream_server")
+            for k in ("ready", "voice", "voice_server", "stream_create", "stream_server")
         }
         self._channel_id = str(channel_id)
         self._guild_id = str(guild_id)
@@ -162,6 +166,16 @@ class Watcher:
                 "the stream to start (is the target actually streaming?)",
             )
             server = await self._wait("stream_server", timeout, "the stream server")
+            # The channel's voice server update rides alongside
+            # VOICE_STATE_UPDATE. It is only needed for the optional call-audio
+            # relay, so missing it must not fail the stream watch.
+            try:
+                voice_server = await asyncio.wait_for(
+                    asyncio.shield(self._futures["voice_server"]), 3
+                )
+            except Exception:
+                voice_server = None
+                self._note("no voice server update; call audio won't be relayed")
         except BaseException:
             await self.close()
             raise
@@ -177,6 +191,8 @@ class Watcher:
             streamer_user_id=str(target_user_id),
             voice_session_id=self._voice_session_id,
             token=server["token"],
+            voice_endpoint=str((voice_server or {}).get("endpoint") or ""),
+            voice_token=str((voice_server or {}).get("token") or ""),
         )
 
     async def close(self) -> None:
@@ -362,6 +378,9 @@ class Watcher:
                 )
                 log.info("watcher ended: %s", self.end_reason)
                 self._signal_end()
+        elif t == "VOICE_SERVER_UPDATE":
+            if str(d.get("guild_id")) == self._guild_id:
+                self._resolve("voice_server", d)
         elif t == "STREAM_CREATE" and d.get("stream_key") == self._stream_key:
             self._resolve("stream_create", d)
         elif t == "STREAM_SERVER_UPDATE" and d.get("stream_key") == self._stream_key:

@@ -112,6 +112,8 @@ class Restream(commands.Cog):
         if self.manager.sender_status is not None:
             lines = [
                 f"{user.mention}'s stream will play in {dest.mention}.",
+                "-# The call in their channel is relayed too, through the sender "
+                "account's microphone.",
                 "-# Check progress any time with `/restream status`.",
             ]
         elif session.stream is not None:
@@ -195,6 +197,25 @@ class Restream(commands.Cog):
             )
         lines.append(f"-# Started <t:{int(s.started_at)}:R>. {state}")
 
+        # Call audio: channel A's voices, mixed and sent as the sender's mic.
+        voice_stats = self.manager.mixer_stats()
+        if (
+            voice_stats is not None
+            and voice_stats["running"]
+            and voice_stats["frames_out"]
+        ):
+            lines.append(
+                f"-# The call in the source channel is being relayed too "
+                f"({voice_stats['speakers']} speaker(s))."
+            )
+        elif s.voice_status.startswith(("unavailable", "disabled")):
+            lines.append(f"-# Call audio {s.voice_status}.")
+        elif s.voice_status.startswith(("failed", "crashed")):
+            lines.append(
+                "-# Call audio couldn't connect "
+                "(see `/restream status debug:True`)."
+            )
+
         if debug:
             if s.stream is not None:
                 lines.append(f"-# Region: `{s.stream.region}`")
@@ -202,6 +223,15 @@ class Restream(commands.Cog):
             sender_text = self.manager.sender_status
             if sender_text is not None:
                 lines.append(f"-# Sender: `{sender_text}`")
+            voice_text = self.manager.voice_status or s.voice_status
+            if voice_text and voice_text != "not started":
+                lines.append(f"-# Voice: `{voice_text}`")
+            if voice_stats is not None:
+                lines.append(
+                    f"-# Mixer: `{voice_stats['speakers']} speakers, "
+                    f"{voice_stats['frames_out']} frames sent, "
+                    f"{voice_stats['errors']} errors`"
+                )
             if not watcher_ok:
                 lines.append(f"-# Watcher: `{s.watcher_status}`")
 

@@ -139,26 +139,34 @@ class DaveState:
     NEW_GROUP_EPOCH = 1
     DISABLED_VERSION = 0
 
-    def __init__(self, *, group_id: int, self_user_id: str, streamer_user_id: str, self_encryptor: Any | None = None) -> None:
+    def __init__(self, *, group_id: int, self_user_id: str, streamer_user_id: str | None = None, self_encryptor: Any | None = None, per_user: bool = False) -> None:
         if dave is None:
             raise RuntimeError("dave.py is not installed")
         self._session = dave.Session(self._on_mls_failure)
-        self._decryptor = dave.Decryptor()
+        # Streams have one sender (the streamer) and use a single decryptor.
+        # A voice channel has one ratchet per speaking user, so `per_user`
+        # swaps the single decryptor for a dict keyed by user id.
+        self._per_user = per_user
+        self._decryptor = None if per_user else dave.Decryptor()
+        self._decryptors: dict[str, Any] = {}
         # Sender side: our own per-epoch ratchet goes into this encryptor.
         self._encryptor = self_encryptor
         self._group_id = int(group_id)
         self._self_id = str(self_user_id)
-        self._streamer_id = str(streamer_user_id)
+        self._streamer_id = str(streamer_user_id) if streamer_user_id is not None else ""
         # Allowlist of users who may join the MLS group. op11/op13 (clients
         # connect/disconnect) keep it in sync; rosters from commits/welcomes
         # add to it. A welcome containing an unknown user is rejected.
-        self._recognized: set[str] = {self._self_id, self._streamer_id}
+        self._recognized: set[str] = {self._self_id}
+        if self._streamer_id:
+            self._recognized.add(self._streamer_id)
         self._transient_keys: dict[int, Any] = {}
         self._prepared: dict[int, int] = {}
         # A Go Live group is occupied by the streamer. Existing members commit
         # Add(us) and welcome us; a local-group commit from us would race them
-        # and be rejected by the gateway / the streamer's client.
-        self._waiting_for_welcome = self._streamer_id != self._self_id
+        # and be rejected by the gateway / the streamer's client. A voice
+        # channel is the same: existing members add and welcome us.
+        self._waiting_for_welcome = per_user or self._streamer_id != self._self_id
 
         self.protocol_version = 0
         self.initialized = False
@@ -189,8 +197,10 @@ class DaveState:
             )
 
     def remove_recognized_user(self, user_id: Any) -> None:
-        if str(user_id) != self._self_id:
-            self._recognized.discard(str(user_id))
+        user_id = str(user_id)
+        if user_id != self._self_id:
+            self._recognized.discard(user_id)
+            self._decryptors.pop(user_id, None)
 
     def _add_roster(self, roster: dict[int, list[int]]) -> None:
         added: list[str] = []
@@ -200,6 +210,7 @@ class DaveState:
                 added.append(str(user_id))
             else:
                 self._recognized.discard(str(user_id))
+                self._decryptors.pop(str(user_id), None)
         if added:
             self._note(
                 f"roster additions: {len(added)} users, "
@@ -269,6 +280,7 @@ class DaveState:
         self.has_ratchet = False
         self.own_ratchet = None
         self._prepared.clear()
+        self._decryptors.clear()
         # Epoch 1 means we are a pending (re)joiner again; let an existing
         # member commit the Add and welcome us.
         self._waiting_for_welcome = True
@@ -361,6 +373,9 @@ class DaveState:
         if not self._session.has_established_group():
             self._note(f"execute transition {transition_id}: group not established")
             return
+        if self._per_user:
+            self._install_voice_ratchets(transition_id)
+            return
         try:
             ratchet = self._session.get_key_ratchet(self._streamer_id)
         except Exception as e:
@@ -385,7 +400,63 @@ class DaveState:
                 self._note("own ratchet installed for sending")
 
     def decrypt(self, kind: str, payload: bytes) -> bytes | None:
-        if not self.has_ratchet:
+        if self._decryptor is None or not self.has_ratchet:
             return None
         media = dave.MediaType.video if kind == "video" else dave.MediaType.audio
         return self._decryptor.decrypt(media, payload)
+
+    # Voice channels: every speaker encrypts with their own ratchet, so each
+    # speaker needs their own Decryptor (one ratchet each).
+
+    def _install_voice_ratchets(self, transition_id: int) -> None:
+        installed = 0
+        for user_id in sorted(self._recognized):
+            if user_id == self._self_id:
+                continue
+            if self._install_voice_ratchet(user_id):
+                installed += 1
+        self.has_ratchet = installed > 0
+        self.transitions += 1
+        self._note(
+            f"voice ratchets installed for {installed} speaker(s) "
+            f"(transition {transition_id}, {len(self._recognized) - 1} known)"
+        )
+
+    def _install_voice_ratchet(self, user_id: str) -> bool:
+        try:
+            ratchet = self._session.get_key_ratchet(user_id)
+        except Exception as e:
+            self._note(f"voice ratchet unavailable for {user_id}: {type(e).__name__}")
+            return False
+        if ratchet is None:
+            return False
+        decryptor = self._decryptors.get(user_id)
+        if decryptor is None:
+            decryptor = self._decryptors[user_id] = dave.Decryptor()
+        try:
+            decryptor.transition_to_key_ratchet(ratchet)
+        except Exception as e:
+            self._note(f"voice ratchet for {user_id} rejected: {type(e).__name__}")
+            self._decryptors.pop(user_id, None)
+            return False
+        return True
+
+    def decrypt_for(self, user_id: str, payload: bytes) -> bytes | None:
+        """Decrypt an audio frame from a specific speaker."""
+        if self._decryptor is not None or not self._session.has_established_group():
+            return None
+        user_id = str(user_id)
+        decryptor = self._decryptors.get(user_id)
+        if decryptor is None:
+            # A speaker who joined after the last transition: their ratchet is
+            # already part of the current epoch, so install it lazily.
+            if not self._install_voice_ratchet(user_id):
+                return None
+            decryptor = self._decryptors.get(user_id)
+            if decryptor is None:
+                return None
+        return decryptor.decrypt(dave.MediaType.audio, payload)
+
+    @property
+    def voice_ratchets(self) -> int:
+        return len(self._decryptors)

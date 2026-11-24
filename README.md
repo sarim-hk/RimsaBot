@@ -30,6 +30,10 @@ all times, refreshed every 15 seconds.
 
 `/restream start user:@someone` takes a member's Go Live screen share from the
 voice channel they're streaming in and plays it in your voice channel instead.
+Everyone in the source channel's call is relayed too: their voices are mixed
+(with simultaneous speakers) and played through the sender account's microphone,
+so you hear the stream and the conversation together. The voices are not added
+to the stream itself.
 
 - **`/restream start <user>`** — begin relaying that member's stream into the
   voice channel you're currently in.
@@ -68,7 +72,7 @@ is added.
 
 You'll need:
 
-- **Python 3.10 or newer.**
+- **Python 3.11 or newer** (the call-audio mixer's codec wheels need it).
 - **A MySQL database** for reaction tracking.
 - **A Discord bot** (application and token) added to your server.
 - **A DatHost account** if you want the game server commands.
