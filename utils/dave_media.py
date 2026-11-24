@@ -25,17 +25,22 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 log = logging.getLogger(__name__)
 
-try:
+if TYPE_CHECKING:
+    # The type checker only sees the module, so every dave.X access below
+    # checks against dave.py's real API instead of "None".
     import dave
-except ImportError:  # probe still runs (milestone 3a behaviour)
-    dave = None
+else:
+    try:
+        import dave
+    except ImportError:  # probe still runs (milestone 3a behaviour)
+        dave = None
 
 OPUS_PAYLOAD_TYPE = 120
 

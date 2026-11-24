@@ -345,12 +345,13 @@ class Watcher:
             ws_exc = self._ws.exception()
             if error is not None:
                 reason = f"Gateway error: {type(error).__name__}"
+                extra = []
             elif code == 4004:
                 reason = "Authentication failed (token rejected)."
-                extra_hint = token_format_hint(self._raw_token)
+                extra = [token_format_hint(self._raw_token)]
             else:
                 reason = f"Gateway connection closed (code {code})."
-            extra = [extra_hint] if code == 4004 and error is None else []
+                extra = []
             if self._close_info and self._close_info[1]:
                 extra.append(f"close reason: {self._close_info[1]}")
             if ws_exc is not None:

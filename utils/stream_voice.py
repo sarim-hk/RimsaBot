@@ -436,13 +436,15 @@ class StreamProbe:
 
     async def _discover(self, ip: str, port: int, ssrc: int) -> tuple[str, int]:
         loop = asyncio.get_running_loop()
-        self._udp = _Udp(self._on_media)
-        await loop.create_datagram_endpoint(lambda: self._udp, remote_addr=(ip, port))
+        udp = self._udp = _Udp(self._on_media)
+        await loop.create_datagram_endpoint(lambda: udp, remote_addr=(ip, port))
+        transport = udp.transport
+        assert transport is not None
         packet = struct.pack(">HHI", 1, 70, ssrc) + b"\x00" * 66
         for _ in range(3):
-            self._udp.transport.sendto(packet)
+            transport.sendto(packet)
             try:
-                return await asyncio.wait_for(asyncio.shield(self._udp.discovery), 2)
+                return await asyncio.wait_for(asyncio.shield(udp.discovery), 2)
             except asyncio.TimeoutError:
                 continue
         raise ProbeError("no reply to UDP IP discovery (UDP blocked?)")
@@ -464,7 +466,12 @@ class StreamProbe:
         finally:
             self._closed_event.set()
             self.close_code = self._ws.close_code
-            why = VOICE_CLOSE_REASONS.get(self.close_code, "unknown reason")
+            code = self.close_code
+            why = (
+                VOICE_CLOSE_REASONS.get(code, "unknown reason")
+                if code is not None
+                else "unknown reason"
+            )
             err = ProbeError(
                 f"voice websocket closed (code {self.close_code}: {why})"
             )
@@ -474,7 +481,7 @@ class StreamProbe:
                     fut.add_done_callback(lambda f: f.exception())
 
     async def _handle_json(self, p: dict) -> None:
-        op, d = p["op"], p.get("d")
+        op, d = p["op"], p.get("d") or {}
         if p.get("seq") is not None:
             self._seq = p["seq"]
         self._note(f"got op{op}")
@@ -874,6 +881,9 @@ class StreamProbe:
         timestamp: int = 0,
         context: dict | None = None,
     ) -> None:
+        dave = self._dave
+        if dave is None:
+            return
         if not nals:
             self._video_incomplete += 1
             return
@@ -926,7 +936,7 @@ class StreamProbe:
             return
         for index in attempts:
             frame = candidates[index]
-            plaintext = self._dave.decrypt("video", frame)
+            plaintext = dave.decrypt("video", frame)
             if plaintext is None:
                 continue
             if self._video_layout != index:
@@ -1017,6 +1027,9 @@ class StreamProbe:
         self._note(f"dumped {label} video frame to {path}")
 
     def _decrypt_frame(self, kind: str, payload: bytes, timestamp: int = 0) -> None:
+        dave = self._dave
+        if dave is None:
+            return
         stats = self._media_stats[kind]
         if kind in self._decrypt_disabled:
             stats["fail"] += 1
@@ -1029,7 +1042,7 @@ class StreamProbe:
                     f"{kind} frame nonce {nonce} gen {nonce >> 24} "
                     f"size {len(payload)}"
                 )
-        plaintext = self._dave.decrypt(kind, payload)
+        plaintext = dave.decrypt(kind, payload)
         if plaintext is None:
             stats["fail"] += 1
             if stats["fail"] >= 50 and not stats["ok"]:

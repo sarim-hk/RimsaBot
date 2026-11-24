@@ -195,7 +195,7 @@ class Sender:
         self.pli_requests = 0
         self._udp_logged = 0
         # Set by the relay: ask A for a fresh IDR when the viewer needs one.
-        self.on_keyframe_request: Callable[[], None] | None = None
+        self.on_keyframe_request: Callable[[], Any] | None = None
         self._last_pli_at = 0.0
         # Each kind keeps an offset and the last source timestamp so outgoing
         # RTP follows A's real pacing instead of a fixed frame rate.
@@ -236,13 +236,14 @@ class Sender:
         )
 
     def send_audio(self, opus: bytes, source_ts: int | None = None) -> bool:
-        if not self.can_send or not opus:
+        encryptor = self.encryptor
+        if encryptor is None or not self.can_send or not opus:
             self.dropped += 1
             return False
         if opus == OPUS_SILENCE:
             frame = opus  # protocol silence packets pass through unencrypted
         else:
-            frame = self.encryptor.encrypt(
+            frame = encryptor.encrypt(
                 dave_media.dave.MediaType.audio, self.audio_ssrc, opus
             )
             if frame is None:
@@ -259,14 +260,15 @@ class Sender:
         return True
 
     def send_video(self, annexb: bytes, source_ts: int | None = None) -> bool:
-        if not self.can_send or len(annexb) < 5:
+        encryptor = self.encryptor
+        if encryptor is None or not self.can_send or len(annexb) < 5:
             self.dropped += 1
             return False
         # The plaintext NAL headers are authoritative for keyframe detection;
         # the protocol frame's headers should be visible too, but there is no
         # reason to parse them for this.
         plain_nals = split_annexb(annexb)
-        frame = self.encryptor.encrypt(
+        frame = encryptor.encrypt(
             dave_media.dave.MediaType.video, self.video_ssrc, annexb
         )
         if frame is None:
@@ -595,14 +597,15 @@ class Sender:
 
     async def _discover(self, ip: str, port: int, ssrc: int) -> tuple[str, int]:
         loop = asyncio.get_running_loop()
-        self._udp = _Udp(self._on_udp_packet)
-        await loop.create_datagram_endpoint(lambda: self._udp, remote_addr=(ip, port))
+        udp = self._udp = _Udp(self._on_udp_packet)
+        await loop.create_datagram_endpoint(lambda: udp, remote_addr=(ip, port))
+        transport = udp.transport
+        assert transport is not None
         packet = struct.pack(">HHI", 1, 70, ssrc) + b"\x00" * 66
-        assert self._udp is not None and self._udp.transport is not None
         for _ in range(3):
-            self._udp.transport.sendto(packet)
+            transport.sendto(packet)
             try:
-                return await asyncio.wait_for(asyncio.shield(self._udp.discovery), 2)
+                return await asyncio.wait_for(asyncio.shield(udp.discovery), 2)
             except asyncio.TimeoutError:
                 continue
         raise SenderError("No reply to UDP IP discovery from the stream server.")
