@@ -62,6 +62,9 @@ FRAME_DUMP_DIR = "capture"
 FRAME_DUMP_FAILURES = 5
 FRAME_DUMP_SUCCESSES = 2
 KEYFRAME_REQUEST_INTERVAL = 2.0  # seconds between self-heal PLIs
+# Relay mode ends after this long without a single RTP packet from A: the
+# stream voice socket does not always close when the stream stops.
+MEDIA_IDLE_TIMEOUT = 15.0
 
 # Binary DAVE opcodes. 21/22/24/23/31 travel as JSON, the rest as raw MLS.
 DAVE_OPS = {
@@ -122,9 +125,16 @@ class StreamProbe:
         self,
         info: StreamInfo,
         on_frame: Callable[[str, bytes, int], None] | None = None,
+        *,
+        idle_timeout: float | None = MEDIA_IDLE_TIMEOUT,
     ) -> None:
         self._info = info
         self._on_frame = on_frame
+        # In relay mode (listen=None) the probe gives up after this long with
+        # no RTP from A; None (or 0) disables the watchdog.
+        self.idle_timeout = idle_timeout
+        self.idle_expired = False
+        self._last_media_at = 0.0  # monotonic time of the last RTP packet
         self._http: aiohttp.ClientSession | None = None
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._udp: _Udp | None = None
@@ -249,7 +259,13 @@ class StreamProbe:
             self._note("got session description")
 
             if listen is None:
-                await self._closed_event.wait()
+                await self._wait_for_end()
+                if self.idle_expired:
+                    self.status = (
+                        f"aborted: no media for {self.idle_timeout:.0f}s. "
+                        f"{self.summary()}"
+                    )
+                    return self.status
             else:
                 await asyncio.sleep(listen)
             self.status = self.summary()
@@ -354,6 +370,29 @@ class StreamProbe:
             await self._http.close()
 
     # -------------------------------------------------------------- internals
+
+    async def _wait_for_end(self) -> None:
+        """Relay mode: block until the socket closes or media stops arriving.
+
+        A stream can stop without its voice socket closing (a paused Go Live,
+        a dead SFU session, a streamer that left), and when the watcher's
+        gateway already dropped no STREAM_DELETE is seen. Without a watchdog
+        the relay would stay "active" while forwarding nothing.
+        """
+        if not self.idle_timeout:
+            await self._closed_event.wait()
+            return
+        self._last_media_at = time.monotonic()
+        while not self._closed_event.is_set():
+            remaining = self._last_media_at + self.idle_timeout - time.monotonic()
+            if remaining <= 0:
+                self.idle_expired = True
+                self._note(f"no media for {self.idle_timeout:.0f}s; ending the relay")
+                return
+            try:
+                await asyncio.wait_for(self._closed_event.wait(), remaining)
+            except asyncio.TimeoutError:
+                continue
 
     def _note(self, event: str) -> None:
         self.trace.append(event)
@@ -551,6 +590,9 @@ class StreamProbe:
     def _on_media(self, packet: bytes) -> None:
         if len(packet) < 12:
             return
+        # Any RTP from A means the source is still live, even before our
+        # transport/DAVE keys are ready (undecryptable frames still count).
+        self._last_media_at = time.monotonic()
         ssrc = int.from_bytes(packet[8:12], "big")
         pt = packet[1] & 0x7F
         is_rtx = ssrc in self._rtx_ssrcs

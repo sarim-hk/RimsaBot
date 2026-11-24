@@ -101,10 +101,12 @@ class RelayManager:
                 self._sender_token,
                 guild_id=guild_id,
                 channel_id=dest_channel_id,
+                on_end=self._on_sender_ended,
             )
             try:
                 await sender.start()
             except SenderError as e:
+                await sender.close()
                 raise RelayError(f"Sender failed: {e}") from e
 
         self._active = session
@@ -244,8 +246,13 @@ class RelayManager:
         if self._active is not session:
             return
         if listen is None:
-            # Relay mode: the stream socket ending ends the relay.
-            self._finish(session, "stream socket closed")
+            # Relay mode: the stream socket ending, or media stopping, ends
+            # the relay.
+            if probe.idle_expired:
+                reason = f"no media from the source for {probe.idle_timeout:.0f}s"
+            else:
+                reason = "stream socket closed"
+            self._finish(session, reason)
         elif self._watcher is None:
             # The watcher died while the probe was still running; now that the
             # probe is done there is nothing left to observe.
@@ -259,6 +266,7 @@ class RelayManager:
         self._probe_finished = False
         if sender is not None:
             sender.on_keyframe_request = None
+            sender.on_end = None
         if probe is not None:
             await probe.close()
         if sender is not None:
@@ -266,6 +274,21 @@ class RelayManager:
         if watcher is not None:
             await watcher.close()
         return session
+
+    def _on_sender_ended(self, reason: str) -> None:
+        """Called by the sender if its media path (B's stream socket) dies."""
+        sender, self._sender = self._sender, None
+        if sender is None:
+            return
+        sender.on_end = None
+        sender.on_keyframe_request = None
+        log.info("Sender ended: %s", reason)
+        self._close_later(sender)
+
+        session = self._active
+        if session is None:
+            return
+        self._finish(session, f"sender ended: {reason}")
 
     def _on_stream_ended(self) -> None:
         """Called by the watcher when the stream stops or its connection drops."""

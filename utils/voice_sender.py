@@ -142,12 +142,16 @@ class Sender:
         guild_id: int,
         channel_id: int,
         gateway_url: str = DEFAULT_GATEWAY_URL,
+        on_end: Callable[[str], None] | None = None,
     ) -> None:
         self._token = clean_token(token)
         self._guild_id = int(guild_id)
         self._channel_id = int(channel_id)  # channel B
         self._gateway_url = gateway_url
         self._launch_id = str(uuid.uuid4())
+        # Set by the relay: called once if the media path dies on its own.
+        self.on_end = on_end
+        self._end_signalled = False
 
         self._http: aiohttp.ClientSession | None = None
         self._ws: aiohttp.ClientWebSocketResponse | None = None
@@ -296,6 +300,8 @@ class Sender:
 
     async def close(self) -> None:
         self._closing = True
+        self.on_end = None
+        await self._leave_stream()
         current = asyncio.current_task()
         for task in self._tasks + self._voice_tasks:
             if task is not current:
@@ -308,6 +314,41 @@ class Sender:
             await self._ws.close()
         if self._http is not None:
             await self._http.close()
+
+    async def _leave_stream(self) -> None:
+        """End the Go Live and leave B explicitly before dropping the sockets.
+
+        Closing the stream voice socket ends the stream too, but only after
+        Discord notices; op19 makes B's stream disappear at once and op4
+        takes the sender account out of the channel.
+        """
+        ws = self._ws
+        if ws is None or ws.closed:
+            return
+        try:
+            if self.stream_key:
+                await asyncio.wait_for(
+                    self._send(19, {"stream_key": self.stream_key}), 2.0
+                )
+            await asyncio.wait_for(
+                self._send(4, {
+                    "guild_id": str(self._guild_id),
+                    "channel_id": None,
+                    "self_mute": False,
+                    "self_deaf": False,
+                }),
+                2.0,
+            )
+            log.info("sender: ended its Go Live and left the channel")
+        except Exception:
+            log.info("sender: explicit stream/voice leave failed; closing anyway")
+
+    def _signal_end(self, reason: str) -> None:
+        """Tell the relay the sender's media path is gone (once, and not on close)."""
+        if self._closing or self._end_signalled or self.on_end is None:
+            return
+        self._end_signalled = True
+        self.on_end(reason)
 
     # ---------------------------------------------------------------- gateway
 
@@ -413,6 +454,12 @@ class Sender:
         finally:
             if not self._closing:
                 log.warning("sender gateway closed (code %s)", self._ws.close_code)
+                if self._voice_ws is None or self._voice_ws.closed:
+                    # No media socket either: there is nothing left to send on.
+                    self._signal_end("gateway closed before the stream socket")
+                else:
+                    # Like the watcher: the main gateway is not the media path.
+                    log.info("sender: stream socket still open; continuing")
 
     async def _handle(self, payload: dict) -> None:
         op = payload.get("op")
@@ -578,7 +625,11 @@ class Sender:
             log.warning("sender voice loop error: %s", type(e).__name__)
         finally:
             if not self._closing:
-                log.warning("sender voice closed (code %s)", self._voice_ws.close_code)
+                code = self._voice_ws.close_code
+                log.warning("sender voice closed (code %s)", code)
+                # The stream voice socket is the media path: frames can no
+                # longer reach the SFU, so the relay is pointless.
+                self._signal_end(f"stream socket closed (code {code})")
 
     async def _voice_handle_json(self, payload: dict) -> None:
         op = payload.get("op")

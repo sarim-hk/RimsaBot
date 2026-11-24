@@ -117,13 +117,16 @@ class Restream(commands.Cog):
     @restream.command(name="stop", description="Stop the active re-stream.")
     @app_commands.checks.has_permissions(manage_guild=True)
     async def stop(self, interaction: discord.Interaction):
-        session = await self.manager.stop()
-        if session is None:
+        if self.manager.active is None:
             await interaction.response.send_message(
                 "No relay is running.", ephemeral=True
             )
             return
-        await interaction.response.send_message("Relay stopped.", ephemeral=True)
+        # Closing the accounts (ending the Go Live and leaving the channels)
+        # can take a few seconds; respond within Discord's 3 s window first.
+        await interaction.response.defer(ephemeral=True)
+        await self.manager.stop()
+        await interaction.followup.send("Relay stopped.", ephemeral=True)
 
     @restream.command(name="status", description="Show the active re-stream.")
     async def status(self, interaction: discord.Interaction):

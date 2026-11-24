@@ -176,6 +176,7 @@ class Watcher:
             for k in ("ready", "voice", "stream_create", "stream_server")
         }
         self._channel_id = str(channel_id)
+        self._guild_id = str(guild_id)
         self._stream_key = f"guild:{guild_id}:{channel_id}:{target_user_id}"
 
         try:
@@ -217,6 +218,7 @@ class Watcher:
         if self._closing:
             return
         self._closing = True
+        await self._leave_voice()
         current = asyncio.current_task()
         for t in self._tasks:
             if t is not current:
@@ -225,6 +227,29 @@ class Watcher:
             await self._ws.close()
         if self._http is not None:
             await self._http.close()
+
+    async def _leave_voice(self) -> None:
+        """Leave the voice channel explicitly instead of waiting for the drop.
+
+        Closing the gateway socket also removes the voice state, but only
+        after Discord notices; this makes the account leave A right away.
+        """
+        ws = self._ws
+        if ws is None or ws.closed or not self._voice_session_id:
+            return
+        try:
+            await asyncio.wait_for(
+                self._send(4, {
+                    "guild_id": self._guild_id,
+                    "channel_id": None,
+                    "self_mute": True,
+                    "self_deaf": False,
+                }),
+                2.0,
+            )
+            self._note("sent op4 (leave voice)")
+        except Exception:
+            log.info("watcher: explicit voice leave failed; closing the gateway anyway")
 
     # -------------------------------------------------------------- internals
 
