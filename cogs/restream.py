@@ -39,9 +39,10 @@ def _where(s: RelaySession) -> str:
     return f"from <#{s.source_channel_id}> into <#{s.dest_channel_id}>"
 
 class Restream(commands.Cog):
-    # Subcommands cannot carry their own guild_only/default_permissions
-    # (Discord limitation); both live on the group and apply to every child.
-    restream = app_commands.Group(name="restream", description="Control the active re-stream.", guild_only=True, default_permissions=discord.Permissions(manage_guild=True))
+    # Discord only sets default_member_permissions on the top-level command, so
+    # there is no per-subcommand gate here. Every /restream command is open to
+    # all members; none of them carry a permission check.
+    restream = app_commands.Group(name="restream", description="Control the active re-stream.", guild_only=True)
 
     def __init__(self, bot: RimsaBot):
         self.bot = bot
@@ -53,7 +54,6 @@ class Restream(commands.Cog):
 
     @restream.command(name="start", description="Relay someone's stream into your voice channel.")
     @app_commands.describe(user="The person who is streaming.", debug="Skip the same-channel check (for testing in one channel).")
-    @app_commands.checks.has_permissions(manage_guild=True)
     async def start(self, interaction: discord.Interaction, user: discord.Member, debug: bool = False):
         invoker = interaction.user
         assert isinstance(invoker, discord.Member)  # guild_only guarantees this
@@ -133,7 +133,6 @@ class Restream(commands.Cog):
         )
 
     @restream.command(name="stop", description="Stop the active re-stream.")
-    @app_commands.checks.has_permissions(manage_guild=True)
     async def stop(self, interaction: discord.Interaction):
         if self.manager.active is None:
             await interaction.response.send_message(

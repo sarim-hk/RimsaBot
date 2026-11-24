@@ -35,7 +35,8 @@ voice channel they're streaming in and plays it in your voice channel instead.
   voice channel you're currently in.
 - **`/restream status`** — plain-language progress ("Waiting for the stream to
   be opened", "Playback is running"), or how the last relay ended.
-- **`/restream stop`** — end it and tidy up.
+- **`/restream stop`** — end it and tidy up. Anyone can start, check, or stop
+  a relay.
 
 Bots can't watch a Go Live, so the relay uses two extra Discord accounts: one
 watches the source stream and one shows it in your channel.
@@ -45,9 +46,10 @@ watches the source stream and one shows it in your channel.
 
 ## Commands
 
-All commands are slash commands. Commands that change things require Manage
-Server. `/dathost` and `/restream` are only available in the server they're
-configured for; the rest work anywhere the bot is added.
+All commands are slash commands. Settings changes require Manage Server; every
+`/restream` command is open to all members. `/dathost` and `/restream` are only
+available in the server they're configured for; the rest work anywhere the bot
+is added.
 
 | Command | Requires | What it does |
 |---|---|---|
@@ -58,9 +60,9 @@ configured for; the rest work anywhere the bot is added.
 | `/dathost start_server` | Manage Server | Start the game server. |
 | `/dathost stop_server` | Manage Server | Stop the game server. |
 | `/dathost check_server` | — | Player count and map. |
-| `/restream start <user>` | Manage Server | Relay a member's screen share into your channel. |
-| `/restream status` | Manage Server | How the relay is doing. |
-| `/restream stop` | Manage Server | End the relay. |
+| `/restream start <user>` | — | Relay a member's screen share into your channel. |
+| `/restream status` | — | How the relay is doing. |
+| `/restream stop` | — | End the relay. |
 
 ## Getting started
 
