@@ -1,32 +1,7 @@
-"""Milestone 3b: DAVE decryption for Go Live stream media.
-
-Every incoming RTP packet is peeled in two layers, in this order:
-
-  1. Transport encryption (SFU <-> us): the aead_*_rtpsize mode chosen in
-     Select Protocol. Nonce is the 4-byte counter appended to the packet,
-     AAD is the RTP header (12 bytes + CSRCs + extension preamble only),
-     and the body is ciphertext + 16-byte tag.
-  2. DAVE end-to-end encryption via libdave's Python bindings (dave.py): the
-     streamer's per-epoch MLS key ratchet decrypts the media frame.
-
-DaveState follows the join/transition flow from the disnake DAVE PR #1492 and
-the libdave TypeScript sample:
-
-  op4/op24(epoch 1) -> Session.init + op26 key package
-  op25 external sender -> set_external_sender
-  op27 proposals -> process_proposals; if we are the committer, op28
-  op29 commit / op30 welcome -> process; then op23 ready (or op31 + re-join)
-  op21 prepare transition -> remember epoch; op23 ready
-  op22 execute transition -> install the streamer's key ratchet
-
-Keys, secret_key and media never appear in logs.
-"""
 from __future__ import annotations
-
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
-
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -49,22 +24,14 @@ AES_MODE = "aead_aes256_gcm_rtpsize"
 # we always prefer and select AES-GCM, so only that mode is implemented.
 XCHACHA_MODE = "aead_xchacha20_poly1305_rtpsize"
 
-
 def available() -> bool:
     return dave is not None
 
-
 def rtp_header_size(packet: bytes) -> int:
-    """Header length as used by the rtpsize AEAD modes (SRTP rules).
-
-    The optional extension contributes only its 4-byte preamble; the
-    extension body itself is part of the encrypted payload.
-    """
     size = 12 + 4 * (packet[0] & 0x0F)
     if packet[0] & 0x10:
         size += 4
     return size
-
 
 def _read_uleb(data: bytes, pos: int, limit: int) -> tuple[int, int]:
     value = 0
@@ -80,14 +47,7 @@ def _read_uleb(data: bytes, pos: int, limit: int) -> tuple[int, int]:
             break
     raise ValueError("truncated ULEB128")
 
-
 def frame_metadata(payload: bytes) -> tuple[int | None, list[tuple[int, int]]]:
-    """Return (truncated nonce, unencrypted ranges) from a protocol frame.
-
-    The ranges are (offset, size) pairs describing which bytes of the frame
-    are plaintext (start codes / NAL headers for H264). They are the ground
-    truth for reconstructing the encoded frame.
-    """
     if len(payload) < 13 or payload[-2:] != b"\xfa\xfa":
         return None, []
     supplemental = payload[-3]
@@ -110,13 +70,7 @@ def frame_metadata(payload: bytes) -> tuple[int | None, list[tuple[int, int]]]:
         pass
     return nonce, ranges
 
-
 def frame_nonce(payload: bytes) -> int | None:
-    """Extract the ULEB128 truncated nonce from a DAVE protocol frame.
-
-    Layout: ciphertext | tag(8) | nonce(ULEB) | ranges | supp_size(1) | FAFA.
-    Returns None if the buffer is not a complete protocol frame.
-    """
     if len(payload) < 13 or payload[-2:] != b"\xfa\xfa":
         return None
     supplemental = payload[-3]
@@ -136,10 +90,7 @@ def frame_nonce(payload: bytes) -> int | None:
             break
     return None
 
-
 class TransportCrypto:
-    """The SFU-side transport encryption for a voice UDP connection."""
-
     def __init__(self, mode: str, secret_key: bytes) -> None:
         self.mode = mode
         if mode != AES_MODE:
@@ -148,13 +99,6 @@ class TransportCrypto:
         self._nonce_tail = b"\x00" * 8
 
     def decrypt_packet(self, packet: bytes) -> tuple[bytes, bytes, int] | None:
-        """Return (rtp_header, media_payload, extension_bytes) or None.
-
-        For rtpsize modes only the 4-byte extension preamble is part of the
-        authenticated header; the extension body itself is inside the
-        ciphertext and has to be stripped before anything else parses the
-        payload (otherwise DAVE sees a prefix and every tag fails).
-        """
         if len(packet) < 16 or packet[0] >> 6 != 2:
             return None
         size = rtp_header_size(packet)
@@ -180,39 +124,22 @@ class TransportCrypto:
         return header, plaintext, extension_bytes
 
     def encrypt_packet(self, header: bytes, payload: bytes, counter: int) -> bytes:
-        """Wrap an RTP header + media payload as a transport-encrypted packet."""
         counter_bytes = (counter & 0xFFFFFFFF).to_bytes(4, "big")
         nonce = counter_bytes + self._nonce_tail
         return header + self._aead.encrypt(nonce, payload, header) + counter_bytes
 
-
 @dataclass
 class DaveAction:
-    """A frame to send once a handler returns: JSON (`data`) or binary."""
     op: int
     data: dict[str, Any] | None = None
     binary: bytes | None = None
 
-
 class DaveState:
-    """MLS state for one voice connection.
-
-    The only media sender we care about is the streamer, so the decryptor is
-    keyed with that user's ratchet. Everything runs on the event loop.
-    """
-
     INIT_TRANSITION_ID = 0
     NEW_GROUP_EPOCH = 1
     DISABLED_VERSION = 0
 
-    def __init__(
-        self,
-        *,
-        group_id: int,
-        self_user_id: str,
-        streamer_user_id: str,
-        self_encryptor: Any | None = None,
-    ) -> None:
+    def __init__(self, *, group_id: int, self_user_id: str, streamer_user_id: str, self_encryptor: Any | None = None) -> None:
         if dave is None:
             raise RuntimeError("dave.py is not installed")
         self._session = dave.Session(self._on_mls_failure)
@@ -242,8 +169,6 @@ class DaveState:
         self.commits = 0
         self.transitions = 0
         self.trace: list[str] = []
-
-    # ---------------------------------------------------------------- state
 
     def _note(self, event: str) -> None:
         self.trace.append(event)
@@ -281,10 +206,7 @@ class DaveState:
                 f"streamer listed: {self._streamer_id in added}"
             )
 
-    # -------------------------------------------------------------- handlers
-
     def on_session_description(self, d: dict[str, Any]) -> list[DaveAction]:
-        """op4: start MLS for the negotiated protocol version."""
         version = int(d.get("dave_protocol_version") or 0)
         self.protocol_version = version
         if version <= self.DISABLED_VERSION:
@@ -320,7 +242,6 @@ class DaveState:
         return [DaveAction(26, binary=key_package)]
 
     def on_prepare_epoch(self, epoch: int, version: int) -> list[DaveAction]:
-        """op24: epoch 1 means the MLS group is being (re)created."""
         self.protocol_version = version
         if epoch != self.NEW_GROUP_EPOCH:
             # Existing group changing protocol version; executed via op21/op22.
@@ -363,7 +284,6 @@ class DaveState:
         return [DaveAction(28, binary=commit_welcome)]
 
     def on_commit(self, transition_id: int, commit: bytes) -> list[DaveAction]:
-        """op29: an existing member committed a new epoch."""
         try:
             result = self._session.process_commit(commit)
         except Exception as e:
@@ -381,7 +301,6 @@ class DaveState:
         return self.prepare_transition(transition_id, self._session.get_protocol_version())
 
     def on_welcome(self, transition_id: int, welcome: bytes) -> list[DaveAction]:
-        """op30: the gateway adds us to the group."""
         try:
             roster = self._session.process_welcome(welcome, self._recognized)
         except Exception as e:
@@ -396,20 +315,12 @@ class DaveState:
         return self.prepare_transition(transition_id, self._session.get_protocol_version())
 
     def _recover(self, transition_id: int) -> list[DaveAction]:
-        """Flag the bad message, reset MLS and re-offer a key package."""
         actions = [DaveAction(31, data={"transition_id": transition_id})]
         if self.protocol_version > self.DISABLED_VERSION:
             actions += self._init(self.protocol_version)
         return actions
 
     def prepare_transition(self, transition_id: int, version: int) -> list[DaveAction]:
-        """Store the coming epoch; transition 0 executes immediately.
-
-        Captured official clients confirm this: after a welcome with
-        transition_id 0 they send no op23 and never wait for op22 — they
-        install the new epoch and start decrypting. Non-zero transitions go
-        through op23 ready -> op22 execute.
-        """
         self._prepared[transition_id] = version
         if transition_id == self.INIT_TRANSITION_ID:
             self.execute_transition(transition_id)
@@ -452,8 +363,6 @@ class DaveState:
                 self._encryptor.set_key_ratchet(own)
                 self.own_ratchet = own
                 self._note("own ratchet installed for sending")
-
-    # --------------------------------------------------------------- decrypt
 
     def decrypt(self, kind: str, payload: bytes) -> bytes | None:
         if not self.has_ratchet:

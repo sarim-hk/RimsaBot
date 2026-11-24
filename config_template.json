@@ -9,5 +9,6 @@
     "DATHOST_USERNAME": "",
     "DATHOST_PASSWORD": "",
     "DATHOST_SERVER_ID": "",
-    "DATHOST_GUILD_ID": 0
+    "DATHOST_GUILD_ID": 0,
+    "RESTREAM_GUILD_ID": 0
 }

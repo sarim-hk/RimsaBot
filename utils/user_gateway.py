@@ -1,13 +1,4 @@
-"""Minimal Discord *user-account* gateway client: the watcher half of the relay.
-
-Milestone 2 scope: log in, join the source voice channel, send STREAM_WATCH,
-and capture the stream connection details (STREAM_CREATE + STREAM_SERVER_UPDATE).
-No media yet. Sequence taken from a captured browser session.
-
-Tokens are never logged. Keep them in environment variables.
-"""
 from __future__ import annotations
-
 import asyncio
 import json
 import logging
@@ -16,7 +7,6 @@ import uuid
 import zlib
 from dataclasses import dataclass, field
 from typing import Any, Callable
-
 import aiohttp
 
 log = logging.getLogger(__name__)
@@ -46,9 +36,7 @@ GATEWAY_HEADERS = {
 # as Sec-WebSocket-Extensions when compress is non-zero (15 = max window).
 WS_COMPRESS = 15
 
-
 def build_identify(token: str, launch_id: str) -> dict:
-    """The op 2 Identify payload `d`, matching the web client's field set."""
     return {
         "token": token,
         "capabilities": CAPABILITIES,
@@ -75,18 +63,13 @@ def build_identify(token: str, launch_id: str) -> dict:
         "client_state": {"guild_versions": {}},
     }
 
-
 class GatewayError(Exception):
-    """Something went wrong talking to the gateway (message is safe to show)."""
-
+    pass
 
 def clean_token(token: str) -> str:
-    """Strip whitespace and wrapping quotes that sneak in when pasting."""
     return token.strip().strip("\"'").strip()
 
-
 def token_format_hint(raw: str) -> str:
-    """Describe obvious paste mistakes. Never includes any part of the token."""
     problems = []
     if raw != raw.strip():
         problems.append("leading/trailing whitespace or a line break")
@@ -105,10 +88,8 @@ def token_format_hint(raw: str) -> str:
         return "token format problems: " + "; ".join(problems)
     return f"token format looks normal ({len(t)} chars, 2 dots)"
 
-
 @dataclass
 class StreamInfo:
-    """Everything needed to open the stream's voice connection (milestone 3)."""
     stream_key: str
     rtc_server_id: str
     rtc_channel_id: str
@@ -119,15 +100,8 @@ class StreamInfo:
     voice_session_id: str = field(repr=False)
     token: str = field(repr=False)  # short-lived stream token
 
-
 class Watcher:
-    def __init__(
-        self,
-        token: str,
-        *,
-        gateway_url: str = DEFAULT_GATEWAY_URL,
-        on_end: Callable[[], None] | None = None,
-    ) -> None:
+    def __init__(self, token: str, *, gateway_url: str = DEFAULT_GATEWAY_URL, on_end: Callable[[], None] | None = None) -> None:
         self._raw_token = token
         self._token = clean_token(token)
         self._gateway_url = gateway_url
@@ -160,16 +134,7 @@ class Watcher:
         self._trace: list[str] = []
         self._close_info: tuple | None = None
 
-    # ---------------------------------------------------------------- public
-
-    async def watch(
-        self,
-        *,
-        guild_id: int,
-        channel_id: int,
-        target_user_id: int,
-        timeout: float = 20.0,
-    ) -> StreamInfo:
+    async def watch(self, *, guild_id: int, channel_id: int, target_user_id: int, timeout: float = 20.0) -> StreamInfo:
         loop = asyncio.get_running_loop()
         self._futures = {
             k: loop.create_future()
@@ -229,11 +194,6 @@ class Watcher:
             await self._http.close()
 
     async def _leave_voice(self) -> None:
-        """Leave the voice channel explicitly instead of waiting for the drop.
-
-        Closing the gateway socket also removes the voice state, but only
-        after Discord notices; this makes the account leave A right away.
-        """
         ws = self._ws
         if ws is None or ws.closed or not self._voice_session_id:
             return
@@ -251,10 +211,7 @@ class Watcher:
         except Exception:
             log.info("watcher: explicit voice leave failed; closing the gateway anyway")
 
-    # -------------------------------------------------------------- internals
-
     async def _check_token(self) -> None:
-        """One read-only REST call, so a dead token fails clearly before the gateway."""
         assert self._http is not None
         try:
             async with self._http.get(

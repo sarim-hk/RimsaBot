@@ -1,17 +1,4 @@
-"""Milestone 4: sender side of the relay.
-
-Logs in as the sender account, joins voice channel B, starts a Go Live in
-that channel, joins the stream's MLS group, and sends media frames
-re-encrypted with that group's key ratchet.
-
-Media path for each frame: DAVE encrypt -> H264/Opus packetize -> transport
-AEAD (aead_aes256_gcm_rtpsize) -> UDP to the stream server.
-
-The stream group only exists once a viewer opens the Go Live; until our own
-key ratchet is installed, frames are counted as dropped.
-"""
 from __future__ import annotations
-
 import asyncio
 import json
 import logging
@@ -22,9 +9,7 @@ import uuid
 import zlib
 from dataclasses import dataclass
 from typing import Any, Callable
-
 import aiohttp
-
 from utils import dave_media
 from utils.dave_media import DaveState, TransportCrypto
 from utils.user_gateway import (
@@ -51,10 +36,8 @@ AUDIO_FRAME_SAMPLES = 960  # 20 ms of Opus at 48 kHz
 VIDEO_FRAME_TICKS = 3000  # 30 fps at 90 kHz
 SILENCE_BYTES = 3
 
-
 class SenderError(Exception):
-    """A sender failure whose message is safe to show."""
-
+    pass
 
 @dataclass
 class StreamTarget:
@@ -64,7 +47,6 @@ class StreamTarget:
     region: str
     endpoint: str
     token: str
-
 
 class _Udp(asyncio.DatagramProtocol):
     def __init__(self, on_packet=None) -> None:
@@ -86,9 +68,7 @@ class _Udp(asyncio.DatagramProtocol):
         if self.on_packet is not None:
             self.on_packet(data)
 
-
 def split_annexb(data: bytes) -> list[bytes]:
-    """Split an Annex-B access unit into NAL units (start codes removed)."""
     starts: list[tuple[int, int]] = []
     i = 0
     n = len(data)
@@ -109,9 +89,7 @@ def split_annexb(data: bytes) -> list[bytes]:
             nals.append(data[start:end])
     return nals
 
-
 def packetize_h264(nals: list[bytes], max_payload: int = MAX_RTP_PAYLOAD) -> list[tuple[bytes, bool]]:
-    """Turn NAL units into RTP payloads; the marker goes on the very last one."""
     packets: list[tuple[bytes, bool]] = []
     for index, nal in enumerate(nals):
         last_nal = index == len(nals) - 1
@@ -133,17 +111,8 @@ def packetize_h264(nals: list[bytes], max_payload: int = MAX_RTP_PAYLOAD) -> lis
             pos += chunk
     return packets
 
-
 class Sender:
-    def __init__(
-        self,
-        token: str,
-        *,
-        guild_id: int,
-        channel_id: int,
-        gateway_url: str = DEFAULT_GATEWAY_URL,
-        on_end: Callable[[str], None] | None = None,
-    ) -> None:
+    def __init__(self, token: str, *, guild_id: int, channel_id: int, gateway_url: str = DEFAULT_GATEWAY_URL, on_end: Callable[[str], None] | None = None) -> None:
         self._token = clean_token(token)
         self._guild_id = int(guild_id)
         self._channel_id = int(channel_id)  # channel B
@@ -205,10 +174,7 @@ class Sender:
         self._video_src_ts: int | None = None
         self.state = "starting"
 
-    # ----------------------------------------------------------------- public
-
     async def start(self) -> None:
-        """Log in, join B, create the Go Live and join its stream voice socket."""
         self._futures = {
             name: asyncio.get_running_loop().create_future()
             for name in (
@@ -301,7 +267,6 @@ class Sender:
         )
 
     def stats(self) -> dict[str, Any]:
-        """Friendly counters for `/restream status` (status() is the raw dump)."""
         return {
             "state": self.state,
             "viewer_ready": self.can_send,
@@ -330,12 +295,6 @@ class Sender:
             await self._http.close()
 
     async def _leave_stream(self) -> None:
-        """End the Go Live and leave B explicitly before dropping the sockets.
-
-        Closing the stream voice socket ends the stream too, but only after
-        Discord notices; op19 makes B's stream disappear at once and op4
-        takes the sender account out of the channel.
-        """
         ws = self._ws
         if ws is None or ws.closed:
             return
@@ -358,13 +317,10 @@ class Sender:
             log.info("sender: explicit stream/voice leave failed; closing anyway")
 
     def _signal_end(self, reason: str) -> None:
-        """Tell the relay the sender's media path is gone (once, and not on close)."""
         if self._closing or self._end_signalled or self.on_end is None:
             return
         self._end_signalled = True
         self.on_end(reason)
-
-    # ---------------------------------------------------------------- gateway
 
     async def _token_status(self) -> int | str:
         assert self._http is not None
@@ -509,8 +465,6 @@ class Sender:
         while True:
             await self._send(1, self._seq)
             await asyncio.sleep(interval)
-
-    # ------------------------------------------------------------------ voice
 
     async def _connect_stream_voice(self) -> None:
         assert self.target is not None and self._http is not None
@@ -752,16 +706,7 @@ class Sender:
             ))
             await asyncio.sleep(interval)
 
-    # ------------------------------------------------------------------ media
-
     def _map_timestamp(self, kind: str, source_ts: int | None, step: int) -> int:
-        """Continue A's RTP timeline on our own random start timestamp.
-
-        Screen streams are variable frame rate: a fixed per-frame increment
-        makes playback pace drift and latency grow. With A's timestamps the
-        viewer sees the original cadence. A long gap or an encoder reset
-        rebases the offset so one stale frame does not stall the timeline.
-        """
         if kind == "audio":
             ts, offset, last = self._audio_ts, self._audio_ts_offset, self._audio_src_ts
         else:
@@ -783,16 +728,7 @@ class Sender:
             self._video_ts, self._video_ts_offset, self._video_src_ts = ts, offset, last
         return ts
 
-    def _send_rtp(
-        self,
-        ssrc: int,
-        payload_type: int,
-        seq: int,
-        timestamp: int,
-        payload: bytes,
-        *,
-        marker: bool,
-    ) -> None:
+    def _send_rtp(self, ssrc: int, payload_type: int, seq: int, timestamp: int, payload: bytes, *, marker: bool) -> None:
         if self._udp is None or self._udp.transport is None or self._crypto is None:
             return
         header = struct.pack(

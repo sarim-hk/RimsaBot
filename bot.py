@@ -19,8 +19,11 @@ class RimsaBot(commands.Bot):
         await self.load_extension("cogs.restream")
 
         dathost_guild = discord.Object(id=int(self.cfg["DATHOST_GUILD_ID"]))
+        restream_guild = discord.Object(id=int(self.cfg["RESTREAM_GUILD_ID"]))
         await self.tree.sync()
         await self.tree.sync(guild=dathost_guild)
+        if restream_guild.id != dathost_guild.id:
+            await self.tree.sync(guild=restream_guild)
 
     async def on_ready(self):
         print(f"Logged on as {self.user}!")

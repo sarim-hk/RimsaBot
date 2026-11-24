@@ -1,21 +1,17 @@
 from __future__ import annotations
-
 import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any
-
 from utils.stream_voice import StreamProbe
 from utils.user_gateway import DEFAULT_GATEWAY_URL, GatewayError, StreamInfo, Watcher
 from utils.voice_sender import Sender, SenderError
 
 log = logging.getLogger(__name__)
 
-
 class RelayError(Exception):
-    """A problem that is safe to show to the person who ran the command."""
-
+    pass
 
 @dataclass
 class RelaySession:
@@ -29,22 +25,13 @@ class RelaySession:
     media_status: str = "not started"  # milestone 3a probe result
     watcher_status: str = "attached"   # updated if the watcher ends before the probe
 
-
 class RelayManager:
-    """Owns the (single) active relay: watcher(A) -> decrypt -> sender(B)."""
-
     # How long the sender's Go Live may sit without a viewer after /restream.
     RELAY_VIEWER_TIMEOUT = 300.0
     # Retry interval for RTCP PLI keyframe requests until one gets through.
     KEYFRAME_PLI_INTERVAL = 1.5
 
-    def __init__(
-        self,
-        watcher_token: str | None = None,
-        sender_token: str | None = None,
-        *,
-        gateway_url: str = DEFAULT_GATEWAY_URL,
-    ) -> None:
+    def __init__(self, watcher_token: str | None = None, sender_token: str | None = None, *, gateway_url: str = DEFAULT_GATEWAY_URL) -> None:
         self._watcher_token = watcher_token
         self._sender_token = sender_token
         self._gateway_url = gateway_url
@@ -79,15 +66,7 @@ class RelayManager:
     def probe_stats(self) -> dict[str, Any] | None:
         return self._probe.stats() if self._probe is not None else None
 
-    async def start(
-        self,
-        *,
-        guild_id: int,
-        source_channel_id: int,
-        dest_channel_id: int,
-        target_user_id: int,
-        started_by: int,
-    ) -> RelaySession:
+    async def start(self, *, guild_id: int, source_channel_id: int, dest_channel_id: int, target_user_id: int, started_by: int) -> RelaySession:
         if self._active is not None:
             raise RelayError("A relay is already running. Use `/restream stop` first.")
         if self._sender_token and not self._watcher_token:
@@ -154,7 +133,6 @@ class RelayManager:
         task.add_done_callback(self._bg.discard)
 
     async def _attach_watcher(self, session: RelaySession) -> StreamInfo:
-        """Join A with the watcher account and attach to the target's stream."""
         assert self._watcher_token
         watcher = Watcher(
             self._watcher_token,
@@ -176,12 +154,6 @@ class RelayManager:
         return stream
 
     async def _watch_after_sender(self, session: RelaySession) -> None:
-        """Wait for a viewer on B, then join A and start relaying.
-
-        With no viewer on the sender's Go Live there is no MLS group and no
-        encryptor ratchet; waiting here also means our own join to A is what
-        triggers the streamer's first keyframe, just as the viewer needs it.
-        """
         sender = self._sender
         assert sender is not None
         loop = asyncio.get_running_loop()
@@ -214,15 +186,7 @@ class RelayManager:
         self._spawn(self._run_probe(session, probe, None))
         self._spawn(self._ensure_keyframe(session, probe, sender))
 
-    async def _ensure_keyframe(
-        self, session: RelaySession, probe: StreamProbe, sender: Sender
-    ) -> None:
-        """Request an IDR from A until one reaches the sender.
-
-        Our viewer join normally triggers a keyframe, but it can arrive before
-        the probe has installed its MLS ratchet. An RTCP PLI (what official
-        viewers send) makes the streamer emit a fresh one.
-        """
+    async def _ensure_keyframe(self, session: RelaySession, probe: StreamProbe, sender: Sender) -> None:
         for _ in range(40):
             if self._active is not session or sender.keyframes_sent:
                 return
@@ -238,9 +202,7 @@ class RelayManager:
         else:
             sender.send_video(plaintext, timestamp)
 
-    async def _run_probe(
-        self, session: RelaySession, probe: StreamProbe, listen: float | None
-    ) -> None:
+    async def _run_probe(self, session: RelaySession, probe: StreamProbe, listen: float | None) -> None:
         session.media_status = "probing"
         try:
             result = await probe.run(listen=listen)
@@ -283,7 +245,6 @@ class RelayManager:
         return session
 
     def _on_sender_ended(self, reason: str) -> None:
-        """Called by the sender if its media path (B's stream socket) dies."""
         sender, self._sender = self._sender, None
         if sender is None:
             return
@@ -298,7 +259,6 @@ class RelayManager:
         self._finish(session, f"sender ended: {reason}")
 
     def _on_stream_ended(self) -> None:
-        """Called by the watcher when the stream stops or its connection drops."""
         watcher, self._watcher = self._watcher, None
         if watcher is None:
             return
@@ -326,7 +286,6 @@ class RelayManager:
             self._finish(session, reason)
 
     def _finish(self, session: RelaySession, reason: str) -> None:
-        """Clear the active relay and close whatever is still open."""
         if self._active is not session:
             return
         self.last_ended = (session, reason, time.time())

@@ -23,10 +23,8 @@ FRIENDLY_ENDINGS = (
     ("sender failed", "the sender account couldn't connect"),
 )
 
-
 def _clip(text: str) -> str:
     return text if len(text) <= MESSAGE_LIMIT else text[: MESSAGE_LIMIT - 1] + "…"
-
 
 def _friendly_ending(reason: str) -> str:
     low = reason.lower()
@@ -35,23 +33,15 @@ def _friendly_ending(reason: str) -> str:
             return text
     return "it ended unexpectedly"
 
-
 def _where(s: RelaySession) -> str:
-    """'in #channel', or 'from #source into #dest' when they differ."""
     if s.source_channel_id == s.dest_channel_id:
         return f"in <#{s.source_channel_id}>"
     return f"from <#{s.source_channel_id}> into <#{s.dest_channel_id}>"
 
-
 class Restream(commands.Cog):
     # Subcommands cannot carry their own guild_only/default_permissions
     # (Discord limitation); both live on the group and apply to every child.
-    restream = app_commands.Group(
-        name="restream",
-        description="Control the active re-stream.",
-        guild_only=True,
-        default_permissions=discord.Permissions(manage_guild=True),
-    )
+    restream = app_commands.Group(name="restream", description="Control the active re-stream.", guild_only=True, default_permissions=discord.Permissions(manage_guild=True))
 
     def __init__(self, bot: RimsaBot):
         self.bot = bot
@@ -61,21 +51,10 @@ class Restream(commands.Cog):
             bot.cfg.get("SENDER_TOKEN") or None,
         )
 
-    @restream.command(
-        name="start",
-        description="Relay someone's stream into your voice channel.",
-    )
-    @app_commands.describe(
-        user="The person who is streaming.",
-        debug="Skip the same-channel check (for testing in one channel).",
-    )
+    @restream.command(name="start", description="Relay someone's stream into your voice channel.")
+    @app_commands.describe(user="The person who is streaming.", debug="Skip the same-channel check (for testing in one channel).")
     @app_commands.checks.has_permissions(manage_guild=True)
-    async def start(
-        self,
-        interaction: discord.Interaction,
-        user: discord.Member,
-        debug: bool = False,
-    ):
+    async def start(self, interaction: discord.Interaction, user: discord.Member, debug: bool = False):
         invoker = interaction.user
         assert isinstance(invoker, discord.Member)  # guild_only guarantees this
 
@@ -167,10 +146,7 @@ class Restream(commands.Cog):
         await self.manager.stop()
         await interaction.followup.send("Stopped.", ephemeral=True)
 
-    @restream.command(
-        name="status",
-        description="Show how the active re-stream is doing.",
-    )
+    @restream.command(name="status", description="Show how the active re-stream is doing.")
     @app_commands.describe(debug="Also show the raw diagnostic counters.")
     async def status(self, interaction: discord.Interaction, debug: bool = False):
         s = self.manager.active
@@ -239,6 +215,10 @@ class Restream(commands.Cog):
     async def cog_unload(self):
         await self.manager.stop()
 
-
 async def setup(bot: RimsaBot):
-    await bot.add_cog(Restream(bot))
+    restream_guild_decorator = app_commands.guilds(int(bot.cfg["RESTREAM_GUILD_ID"]))
+    cog = Restream(bot)
+    for command in cog.get_app_commands():
+        restream_guild_decorator(command)
+
+    await bot.add_cog(cog)

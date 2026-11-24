@@ -1,21 +1,4 @@
-"""Milestones 3a/3b: the Go Live stream's voice connection over *plain UDP*.
-
-3a proved the stream server accepts the classic UDP voice protocol instead of
-WebRTC (op1 Select Protocol `udp` -> op4, then RTP over UDP).
-
-3b adds decryption, layer by layer (see utils/dave_media.py):
-
-  voice WS: op8 Hello -> op0 Identify -> op2 Ready
-  UDP:      IP discovery against Ready's ip/port
-  voice WS: op1 Select Protocol (udp) -> op4 Session Description
-  DAVE:     op4/op24 -> op26 key package; op25/27/29/30 join the MLS group;
-            op21/op22 install the streamer's per-epoch key ratchet
-  media:    UDP -> transport AEAD (secret_key) -> DAVE frame -> plaintext
-
-Logging names and counts only, never tokens, keys or media.
-"""
 from __future__ import annotations
-
 import asyncio
 import base64
 import json
@@ -25,9 +8,7 @@ import struct
 import time
 from pathlib import Path
 from typing import Any, Callable
-
 import aiohttp
-
 from utils import dave_media
 from utils.dave_media import (
     DaveAction,
@@ -81,10 +62,8 @@ AUDIO_PT = 120
 VIDEO_PT = 101
 RTX_PT = 102
 
-
 class ProbeError(Exception):
     pass
-
 
 class _Udp(asyncio.DatagramProtocol):
     def __init__(self, on_media: Callable[[bytes], None] | None = None) -> None:
@@ -119,15 +98,8 @@ class _Udp(asyncio.DatagramProtocol):
         if self.on_media is not None:
             self.on_media(data)
 
-
 class StreamProbe:
-    def __init__(
-        self,
-        info: StreamInfo,
-        on_frame: Callable[[str, bytes, int], None] | None = None,
-        *,
-        idle_timeout: float | None = MEDIA_IDLE_TIMEOUT,
-    ) -> None:
+    def __init__(self, info: StreamInfo, on_frame: Callable[[str, bytes, int], None] | None = None, *, idle_timeout: float | None = MEDIA_IDLE_TIMEOUT) -> None:
         self._info = info
         self._on_frame = on_frame
         # In relay mode (listen=None) the probe gives up after this long with
@@ -215,10 +187,7 @@ class StreamProbe:
                     int(info.rtc_server_id) - 1,
                 )
 
-    # ---------------------------------------------------------------- public
-
     async def run(self, *, timeout: float = 15.0, listen: float | None = 20.0) -> str:
-        """Do the handshake, listen (forever if `listen` is None), return a summary."""
         loop = asyncio.get_running_loop()
         self._ready = loop.create_future()
         self._session = loop.create_future()
@@ -319,7 +288,6 @@ class StreamProbe:
         )
 
     def stats(self) -> dict[str, Any]:
-        """Friendly counters for `/restream status` (summary() is the raw dump)."""
         return {
             "running": not self._done and self.close_code is None,
             "ratchet": bool(self._dave is not None and self._dave.has_ratchet),
@@ -332,15 +300,6 @@ class StreamProbe:
         }
 
     def request_keyframe(self) -> bool:
-        """Ask the stream's SFU for a fresh H264 keyframe (RTCP PLI).
-
-        This is what official viewer clients send when they need an IDR: an
-        RTCP PSFB with FMT 1 and the streamer's video SSRC. In the rtpsize
-        transport modes it is encrypted exactly like RTP (the 8-byte RTCP
-        header is the AAD, the 4-byte counter is appended).
-
-        Safe to call at any time; returns False if the media path is not up.
-        """
         if self._crypto is None or self._udp is None or self._udp.transport is None:
             return False
         if not self._self_ssrc or not self._video_ssrcs:
@@ -382,16 +341,7 @@ class StreamProbe:
         if self._http is not None and not self._http.closed:
             await self._http.close()
 
-    # -------------------------------------------------------------- internals
-
     async def _wait_for_end(self) -> None:
-        """Relay mode: block until the socket closes or media stops arriving.
-
-        A stream can stop without its voice socket closing (a paused Go Live,
-        a dead SFU session, a streamer that left), and when the watcher's
-        gateway already dropped no STREAM_DELETE is seen. Without a watchdog
-        the relay would stay "active" while forwarding nothing.
-        """
         if not self.idle_timeout:
             await self._closed_event.wait()
             return
@@ -569,8 +519,6 @@ class StreamProbe:
             else:
                 await self._send_actions(dave.on_welcome(transition_id, payload[2:]))
 
-    # ------------------------------------------------------------ media path
-
     def _note_ssrcs(self, d: dict) -> None:
         if d.get("audio_ssrc"):
             self._audio_ssrcs.add(int(d["audio_ssrc"]))
@@ -690,12 +638,6 @@ class StreamProbe:
             self._decrypt_frame("audio", payload, timestamp)
 
     def _video_nals(self, payload: bytes) -> list[tuple[bool, bytes]]:
-        """Split an H264 RTP payload into NAL units.
-
-        Returns (starts_new_nal, bytes) items. FU-A continuation fragments
-        append to the previous NAL; STAP-A yields several NALs; single NAL
-        units pass through. Packetization headers never reach DAVE.
-        """
         if not payload:
             return []
         if self._video_codec not in (None, "H264"):
@@ -724,11 +666,7 @@ class StreamProbe:
 
     VIDEO_REASSEMBLY_GRACE = 0.04  # seconds to wait for RTX after a marker
 
-    def _on_video_fragment(
-        self, ssrc: int, timestamp: int, seq: int, payload: bytes, marker: bool,
-        via_rtx: bool = False, extension_bytes: int = 0, header: bytes = b"",
-    ) -> None:
-        """Collect one video fragment (primary or RTX) into its frame."""
+    def _on_video_fragment(self, ssrc: int, timestamp: int, seq: int, payload: bytes, marker: bool, via_rtx: bool = False, extension_bytes: int = 0, header: bytes = b"") -> None:
         buffer = self._video_buffers.get(ssrc)
         if buffer is not None and buffer["ts"] != timestamp:
             self._finalize_video_frame(ssrc)
@@ -803,7 +741,6 @@ class StreamProbe:
 
     @staticmethod
     def _video_frame_range(buffer: dict) -> tuple[int, int] | None:
-        """(first_seq, packet_count) implied by the marker, or None."""
         marker = buffer["marker_seq"]
         if marker is None:
             return None
@@ -887,13 +824,7 @@ class StreamProbe:
             },
         )
 
-    def _decrypt_video_nals(
-        self,
-        nals: list[bytes],
-        info: str = "",
-        timestamp: int = 0,
-        context: dict | None = None,
-    ) -> None:
+    def _decrypt_video_nals(self, nals: list[bytes], info: str = "", timestamp: int = 0, context: dict | None = None) -> None:
         dave = self._dave
         if dave is None:
             return
@@ -994,17 +925,13 @@ class StreamProbe:
             self._note("giving up on video: 50 straight decrypt failures")
 
     def _maybe_request_keyframe(self) -> None:
-        """Self-heal: a dropped video frame stays visible until the next IDR."""
         now = time.monotonic()
         if now - self._last_keyframe_request < KEYFRAME_REQUEST_INTERVAL:
             return
         self._last_keyframe_request = now
         self.request_keyframe()
 
-    def _dump_frame(
-        self, label: str, nals: list[bytes], info: str, context: dict | None
-    ) -> None:
-        """Write one frame's transport-decrypted payloads for offline analysis."""
+    def _dump_frame(self, label: str, nals: list[bytes], info: str, context: dict | None) -> None:
         if context is None:
             return
         index = self._dump_failures if label == "fail" else self._dump_successes
