@@ -300,6 +300,18 @@ class Sender:
             f"rtcp {self.rtcp_received}, pli {self.pli_requests}"
         )
 
+    def stats(self) -> dict[str, Any]:
+        """Friendly counters for `/restream status` (status() is the raw dump)."""
+        return {
+            "state": self.state,
+            "viewer_ready": self.can_send,
+            "audio_sent": self.audio_sent,
+            "video_sent": self.video_sent,
+            "keyframes_sent": self.keyframes_sent,
+            "dropped": self.dropped,
+            "pli": self.pli_requests,
+        }
+
     async def close(self) -> None:
         self._closing = True
         self.on_end = None

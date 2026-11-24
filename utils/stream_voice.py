@@ -318,6 +318,19 @@ class StreamProbe:
             f"{self._undecryptable}; dave ops: {dave}{code}; last events: {tail}"
         )
 
+    def stats(self) -> dict[str, Any]:
+        """Friendly counters for `/restream status` (summary() is the raw dump)."""
+        return {
+            "running": not self._done and self.close_code is None,
+            "ratchet": bool(self._dave is not None and self._dave.has_ratchet),
+            "audio_ok": self._media_stats["audio"]["ok"],
+            "audio_fail": self._media_stats["audio"]["fail"],
+            "video_ok": self._media_stats["video"]["ok"],
+            "video_fail": self._media_stats["video"]["fail"],
+            "pli": self._pli_sent,
+            "idle_expired": self.idle_expired,
+        }
+
     def request_keyframe(self) -> bool:
         """Ask the stream's SFU for a fresh H264 keyframe (RTCP PLI).
 

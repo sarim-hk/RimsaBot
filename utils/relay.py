@@ -4,6 +4,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
+from typing import Any
 
 from utils.stream_voice import StreamProbe
 from utils.user_gateway import DEFAULT_GATEWAY_URL, GatewayError, StreamInfo, Watcher
@@ -71,6 +72,12 @@ class RelayManager:
     @property
     def sender_status(self) -> str | None:
         return self._sender.status() if self._sender is not None else None
+
+    def sender_stats(self) -> dict[str, Any] | None:
+        return self._sender.stats() if self._sender is not None else None
+
+    def probe_stats(self) -> dict[str, Any] | None:
+        return self._probe.stats() if self._probe is not None else None
 
     async def start(
         self,
