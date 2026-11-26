@@ -10,7 +10,6 @@ charset-normalizer==3.4.4
 cryptography==50.0.2
 dave.py==1.1.0
 discord.py==2.6.4
-mysql-connector-python==9.7.0
 frozenlist==1.8.0
 idna==3.11
 multidict==6.7.1

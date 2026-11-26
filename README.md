@@ -1,19 +1,5 @@
 # RimsaBot
 
-### Reaction tracking
-
-The bot remembers every reaction people add or remove, and can turn that into
-quick text leaderboards:
-
-- **`/react info [user]`** — a bar chart of all the reactions someone has
-  received, most-received first. Defaults to you.
-- **`/react leaderboard <emoji>`** — who receives a specific emoji the most.
-- **`/react set_max_message_age <seconds>`** — how far back the bot should
-  look; anything older than this doesn't count. Defaults to 6 hours.
-
-Reactions on your own messages don't count. Everything lives in a MySQL
-database that the bot sets up on its own.
-
 ### Game server control
 
 Start, stop, and check a DatHost game server without leaving Discord:
@@ -58,9 +44,6 @@ is added.
 | Command | Requires | What it does |
 |---|---|---|
 | `/ping` | — | Show latency. |
-| `/react info [user]` | — | Reactions a member has received. |
-| `/react leaderboard <emoji>` | — | Who receives an emoji the most. |
-| `/react set_max_message_age <seconds>` | Manage Server | Change how far back reaction tracking looks. |
 | `/dathost start_server` | Manage Server | Start the game server. |
 | `/dathost stop_server` | Manage Server | Stop the game server. |
 | `/dathost check_server` | — | Player count and map. |
@@ -73,7 +56,6 @@ is added.
 You'll need:
 
 - **Python 3.11 or newer** (the call-audio mixer's codec wheels need it).
-- **A MySQL database** for reaction tracking.
 - **A Discord bot** (application and token) added to your server.
 - **A DatHost account** if you want the game server commands.
 - **Two spare Discord accounts** if you want the restream — they must be
@@ -95,7 +77,6 @@ Fill in `config.json`:
 | Key | For | What to put |
 |---|---|---|
 | `DISCORD_TOKEN` | bot | Your bot's token. |
-| `MYSQL_SERVER`, `MYSQL_DB`, `MYSQL_USERNAME`, `MYSQL_PASSWORD` | reactions | Database login. Tables are created automatically. |
 | `RESTREAM_GUILD_ID` | restream | Server where `/restream` should appear. |
 | `WATCHER_TOKEN` | restream | Account that watches the source stream. |
 | `SENDER_TOKEN` | restream | Account that shows the stream in your channel. |

@@ -1,8 +1,4 @@
 {
-    "MYSQL_SERVER": "",
-    "MYSQL_DB": "",
-    "MYSQL_USERNAME": "",
-    "MYSQL_PASSWORD": "",
     "DISCORD_TOKEN": "",
     "WATCHER_TOKEN": "",
     "SENDER_TOKEN": "",

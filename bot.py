@@ -15,7 +15,6 @@ class RimsaBot(commands.Bot):
     async def setup_hook(self):
         await self.load_extension("cogs.general")
         await self.load_extension("cogs.dathost")
-        await self.load_extension("cogs.reactions")
         await self.load_extension("cogs.restream")
 
         dathost_guild = discord.Object(id=int(self.cfg["DATHOST_GUILD_ID"]))
