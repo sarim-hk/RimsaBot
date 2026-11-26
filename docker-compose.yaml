@@ -1,0 +1,7 @@
+services:
+  rimsabot:
+    build: .
+    container_name: rimsabot
+    restart: unless-stopped
+    volumes:
+      - ./config.json:/app/config.json:ro
